@@ -37,6 +37,7 @@ cp .env.example .env
 | `MINERU_TIMEOUT_SECONDS` | 单次 MinerU 解析等待时间（秒） | `3600` |
 | `CHUNK_SIZE` | 切分文本块的目标长度（字符） | `800` |
 | `CHUNK_OVERLAP` | 相邻文本块重复保留的长度（字符） | `100` |
+| `WORKER_POLL_INTERVAL_SECONDS` | Worker 轮询任务队列的间隔（秒） | `2` |
 | `OPENAI_API_KEY` | 模型服务密钥，接入模型时填写 | `your_api_key_here` |
 | `CHAT_MODEL` | 对话模型名称，接入模型时填写 | `your_chat_model_here` |
 | `EMBEDDING_MODEL` | 向量模型名称，接入模型时填写 | `your_embedding_model_here` |
@@ -59,11 +60,13 @@ MinerU 本地解析服务需先启动（当前配置使用本地 `basic` 档位�
 
 MinerU 程序依赖版本记录在 `requirements.txt`；模型文件与 MinerU 自身缓存位于用户目录 `C:\Users\ASUS\.mineru\`，不会放进 Git 仓库。当前已下载并验证 `basic` 模型。
 
-启动项目：
+启动项目（API 启动时会自动启动 SQLite 轮询 Worker）：
 
 ```powershell
 python main.py
 ```
+
+上传接口只将步骤写入 SQLite 队列。后台 Worker 轮询并原子领取 `queued` 步骤；MinerU 成功后才将切分步骤排队。步骤失败会将依赖步骤标记为跳过。Worker 随 API 服务启动和关闭，无需单独打开终端。
 
 启动后可访问：
 

@@ -22,6 +22,7 @@ class Settings:
     mineru_timeout_seconds: int = int(os.getenv("MINERU_TIMEOUT_SECONDS", "3600"))
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "100"))
+    worker_poll_interval_seconds: float = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2"))
 
     @property
     def database_path(self) -> Path:
