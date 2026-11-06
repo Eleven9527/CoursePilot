@@ -284,7 +284,7 @@ def retry_parse(document_id: str) -> dict:
         document = document_service.get_document(document_id)
         if document is None:
             raise HTTPException(404, "文档不存在")
-        raise HTTPException(409, "文档正在解析中")
+        raise HTTPException(409, "文档正在处理中")
     task = document_service.get_task(task_id)
     if task is None:
         raise HTTPException(500, "解析任务已创建，但无法读取任务记录")
