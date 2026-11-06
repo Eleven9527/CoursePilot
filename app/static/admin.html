@@ -81,7 +81,7 @@
     const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const formatSize = bytes => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     const formatDate = value => new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
-    const parseLabels={queued:'排队中',source_saved:'原始文件已保存',source_save_failed:'原始文件保存失败',processing:'处理中',mineru_parsing:'MinerU 解析中',mineru_failed:'MinerU 解析失败',chunking:'文本切分中',chunking_failed:'文本切分失败',succeeded:'已完成',failed:'失败',not_started:'未解析'};
+    const parseLabels={queued:'排队中',waiting:'等待上一步',skipped:'已跳过',source_saved:'原始文件已保存',source_save_failed:'原始文件保存失败',processing:'处理中',mineru_parsing:'MinerU 解析中',mineru_failed:'MinerU 解析失败',chunking:'文本切分中',chunking_failed:'文本切分失败',succeeded:'已完成',failed:'失败',not_started:'未解析'};
     const unitSelect=document.querySelector('#unit');
     for(let i=1;i<=20;i++){const option=document.createElement('option');option.value=`第${i}单元`;option.textContent=`第${i}单元`;unitSelect.append(option)}
     const unspecifiedUnit=document.createElement('option');unspecifiedUnit.value='未指定';unspecifiedUnit.textContent='未指定';unitSelect.append(unspecifiedUnit);
@@ -107,6 +107,20 @@
         const step=steps.find(item=>item.step_key===key);const status=step?.status||'not_started';
         const badge=document.querySelector(`[data-step-status="${key}"]`);badge.textContent=parseLabels[status]||'未知';badge.className=`stage-status state-${status}`;
       }
+    }
+    const wait = milliseconds => new Promise(resolve=>setTimeout(resolve,milliseconds));
+    async function loadOrQueueChunks(documentId){
+      let result=await request(`${API}/${documentId}/chunks`);
+      if(['not_started','failed','skipped'].includes(result.status))result=await request(`${API}/${documentId}/chunks`,{method:'POST'});
+      for(let attempt=0;attempt<20;attempt++){
+        updateReviewStepStatuses(await request(`${API}/${documentId}/steps`));
+        if(result.status==='succeeded')return result;
+        if(['failed','skipped'].includes(result.status))throw new Error(result.error||'切分任务失败，请查看文档状态或重试');
+        await wait(1000);
+        if(activeReviewId!==documentId||activeReviewStage!=='chunking')return null;
+        result=await request(`${API}/${documentId}/chunks`);
+      }
+      throw new Error(`切分任务${parseLabels[result.status]||'处理中'}。请确认 Worker 已启动，稍后重新打开校验页面查看。`);
     }
     async function renderOriginalSource(doc){
       const sourcePane=document.querySelector('#source-pane');
@@ -136,7 +150,16 @@
       sourcePane.innerHTML=reviewMarkdownText?`<pre>${escapeHtml(reviewMarkdownText)}</pre>`:`<div class="review-placeholder">${escapeHtml(reviewMarkdownError||doc.parse_error||'解析文本尚未生成，无法进行切分校验。')}</div>`;
       resultPane.innerHTML='<div class="review-placeholder">正在加载切分结果…</div>';
       try{
-        if(!cachedReviewChunks){try{cachedReviewChunks=await request(`${API}/${activeReviewId}/chunks`)}catch{cachedReviewChunks=await request(`${API}/${activeReviewId}/chunks`,{method:'POST'});updateReviewStepStatuses(await request(`${API}/${activeReviewId}/steps`))}}
+        if(!reviewMarkdownText){
+          const response=await fetch(`${API}/${doc.id}/result`);
+          if(!response.ok)throw new Error('MinerU 解析文本尚未生成，请稍后再查看切分校验');
+          reviewMarkdownText=await response.text();
+          if(activeReviewId!==doc.id||activeReviewStage!==stage)return;
+          sourcePane.innerHTML=`<pre>${escapeHtml(reviewMarkdownText)}</pre>`;
+          document.querySelector('#source-summary').textContent=`解析文本 · ${reviewMarkdownText.length} 字符`;
+        }
+        if(!cachedReviewChunks)cachedReviewChunks=await loadOrQueueChunks(activeReviewId);
+        if(!cachedReviewChunks)return;
         if(activeReviewId!==doc.id||activeReviewStage!==stage)return;
         if(!cachedReviewChunks.chunks.length){resultPane.innerHTML='<div class="review-placeholder">文档没有可切分的文字内容</div>';return}
         resultPane.innerHTML=cachedReviewChunks.chunks.map(chunk=>`<article class="chunk-card"><div class="chunk-card-head"><span>文本块 ${chunk.chunk_index+1} · ${chunk.char_count} 字符</span><span>${escapeHtml(chunk.metadata.grade)} · ${escapeHtml(chunk.metadata.unit)}</span></div>${chunk.heading?`<div class="chunk-card-head chunk-heading">${escapeHtml(chunk.heading)}</div>`:''}<div class="chunk-text">${escapeHtml(chunk.text)}</div></article>`).join('');

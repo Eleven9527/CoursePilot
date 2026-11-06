@@ -1,18 +1,33 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Event, Thread
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.services.document_service import initialize_database
+from app.services.document_service import initialize_database, recover_interrupted_steps
+from app.services.worker_service import run_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
-    yield
+    recover_interrupted_steps()
+    stop_event = Event()
+    worker_thread = Thread(
+        target=run_worker,
+        args=(stop_event,),
+        name="document-worker",
+        daemon=True,
+    )
+    worker_thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=5)
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)

@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import settings
-from app.core.enums import ParseStepStatus
+from app.core.enums import ParseStepKey, ParseStepStatus
 
 
 def _now() -> str:
@@ -61,16 +61,6 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_parse_task_steps_task_key ON parse_task_steps(task_id,step_key)"
         )
-        # 服务重启后，将中断的任务标记为失败，避免一直显示为运行中。
-        connection.execute(
-            "UPDATE parse_tasks SET status='failed', error='服务重启，任务中断', finished_at=? WHERE status IN ('queued','processing')",
-            (_now(),),
-        )
-        connection.execute(
-            """UPDATE documents SET parsing_status=?, parse_error='服务重启，任务中断'
-            WHERE parsing_status IN ('queued','processing','source_saved','mineru_parsing','chunking')""",
-            (ParseStepStatus.FAILED.value,),
-        )
         legacy_documents = connection.execute(
             """SELECT id,current_task_id,stored_name,parsing_status,parse_error,parsed_path,updated_at
             FROM documents WHERE current_task_id IS NOT NULL"""
@@ -81,6 +71,13 @@ def initialize_database() -> None:
             ).fetchone()
             if existing_steps:
                 continue
+            mineru_status = (
+                ParseStepStatus.SUCCEEDED.value
+                if document["parsed_path"] and document["parsing_status"] == ParseStepStatus.SUCCEEDED.value
+                else ParseStepStatus.FAILED.value
+                if document["parsing_status"] in {ParseStepStatus.FAILED.value,ParseStepStatus.MINERU_FAILED.value}
+                else ParseStepStatus.QUEUED.value
+            )
             _insert_steps(
                 connection,
                 document["current_task_id"],
@@ -91,10 +88,71 @@ def initialize_database() -> None:
             connection.execute(
                 """UPDATE parse_task_steps SET status=?,error=?,output_path=?,finished_at=?
                 WHERE task_id=? AND step_key='mineru_parse'""",
-                (document["parsing_status"],document["parse_error"],document["parsed_path"],
-                 document["updated_at"] if document["parsing_status"] in {ParseStepStatus.FAILED.value,ParseStepStatus.SUCCEEDED.value} else None,
+                (mineru_status,document["parse_error"],document["parsed_path"],
+                 document["updated_at"] if mineru_status in {ParseStepStatus.FAILED.value,ParseStepStatus.SUCCEEDED.value} else None,
                  document["current_task_id"]),
             )
+        current_documents = connection.execute(
+            """SELECT id,current_task_id,parsed_path FROM documents
+            WHERE current_task_id IS NOT NULL"""
+        ).fetchall()
+        for document in current_documents:
+            mineru_step = connection.execute(
+                "SELECT status FROM parse_task_steps WHERE task_id=? AND step_key=?",
+                (document["current_task_id"],ParseStepKey.MINERU_PARSE.value),
+            ).fetchone()
+            initial_status = (
+                ParseStepStatus.QUEUED.value
+                if mineru_step and mineru_step["status"] == ParseStepStatus.SUCCEEDED.value and document["parsed_path"]
+                else ParseStepStatus.SKIPPED.value
+                if mineru_step and mineru_step["status"] == ParseStepStatus.FAILED.value
+                else ParseStepStatus.WAITING.value
+            )
+            connection.execute(
+                """INSERT OR IGNORE INTO parse_task_steps
+                (id,task_id,document_id,step_key,title,status,input_path,created_at)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (uuid4().hex,document["current_task_id"],document["id"],ParseStepKey.CHUNKING.value,
+                 "文本切分",initial_status,document["parsed_path"],_now()),
+            )
+            if initial_status == ParseStepStatus.QUEUED.value:
+                connection.execute(
+                    """UPDATE parse_task_steps SET status=?,input_path=?
+                    WHERE task_id=? AND step_key=? AND status=?""",
+                    (ParseStepStatus.QUEUED.value,document["parsed_path"],document["current_task_id"],
+                     ParseStepKey.CHUNKING.value,ParseStepStatus.WAITING.value),
+                )
+            elif initial_status == ParseStepStatus.SKIPPED.value:
+                connection.execute(
+                    """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+                    WHERE task_id=? AND step_key=? AND status=?""",
+                    (ParseStepStatus.SKIPPED.value,"MinerU 解析失败，未执行切分",_now(),
+                     document["current_task_id"],ParseStepKey.CHUNKING.value,ParseStepStatus.WAITING.value),
+                )
+
+
+def recover_interrupted_steps() -> None:
+    """Worker 启动时重新排队上次进程中断的步骤。"""
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,started_at=NULL,error=NULL
+            WHERE status=?""",
+            (ParseStepStatus.QUEUED.value,ParseStepStatus.PROCESSING.value),
+        )
+        connection.execute(
+            """UPDATE parse_tasks SET status=?,started_at=NULL,error=NULL
+            WHERE status=? AND id IN (SELECT task_id FROM parse_task_steps WHERE status=?)""",
+            (ParseStepStatus.QUEUED.value,ParseStepStatus.PROCESSING.value,ParseStepStatus.QUEUED.value),
+        )
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?
+            WHERE step_key=? AND status=? AND EXISTS (
+                SELECT 1 FROM parse_task_steps AS mineru
+                WHERE mineru.task_id=parse_task_steps.task_id AND mineru.step_key=? AND mineru.status!=?
+            )""",
+            (ParseStepStatus.WAITING.value,ParseStepKey.CHUNKING.value,ParseStepStatus.QUEUED.value,
+             ParseStepKey.MINERU_PARSE.value,ParseStepStatus.SUCCEEDED.value),
+        )
 
 
 def _document(row: sqlite3.Row) -> dict:
@@ -186,13 +244,26 @@ def queue_parse(document_id: str, force: bool = False) -> str | None:
     now, task_id = _now(), uuid4().hex
     with sqlite3.connect(settings.database_path) as connection:
         connection.row_factory = sqlite3.Row
-        row = connection.execute("SELECT parsing_status,stored_name FROM documents WHERE id=?", (document_id,)).fetchone()
+        row = connection.execute("SELECT parsing_status,stored_name,current_task_id FROM documents WHERE id=?", (document_id,)).fetchone()
         if row is None or (row["parsing_status"] in {
             ParseStepStatus.QUEUED.value, ParseStepStatus.PROCESSING.value,
             ParseStepStatus.SOURCE_SAVED.value, ParseStepStatus.MINERU_PARSING.value,
             ParseStepStatus.CHUNKING.value,
         } and not force):
             return None
+        if row["current_task_id"]:
+            connection.execute(
+                """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+                WHERE task_id=? AND status IN (?,?)""",
+                (ParseStepStatus.SKIPPED.value,"任务已被新的解析任务替代",now,row["current_task_id"],
+                 ParseStepStatus.QUEUED.value,ParseStepStatus.WAITING.value),
+            )
+            connection.execute(
+                """UPDATE parse_tasks SET status=?,error=?,finished_at=?
+                WHERE id=? AND status IN (?,?)""",
+                (ParseStepStatus.FAILED.value,"任务已被新的解析任务替代",now,row["current_task_id"],
+                 ParseStepStatus.QUEUED.value,ParseStepStatus.PROCESSING.value),
+            )
         connection.execute(
             "UPDATE documents SET parsing_status=?,parse_error=NULL,current_task_id=?,updated_at=? WHERE id=?",
             (ParseStepStatus.SOURCE_SAVED.value,task_id,now,document_id),
@@ -219,11 +290,11 @@ def _insert_steps(connection: sqlite3.Connection, task_id: str, document_id: str
         (id,task_id,document_id,step_key,title,status,input_path,output_path,created_at,finished_at)
         VALUES (?,?,?,?,?,?,?,?,?,?)""",
         [
-            (uuid4().hex,task_id,document_id,"source_saved","原始文件保存",ParseStepStatus.SUCCEEDED.value,
+            (uuid4().hex,task_id,document_id,ParseStepKey.SOURCE_SAVED.value,"原始文件保存",ParseStepStatus.SUCCEEDED.value,
              None,str(source_path),now,now),
-            (uuid4().hex,task_id,document_id,"mineru_parse","MinerU 结构解析",ParseStepStatus.QUEUED.value,
+            (uuid4().hex,task_id,document_id,ParseStepKey.MINERU_PARSE.value,"MinerU 结构解析",ParseStepStatus.QUEUED.value,
              str(source_path),None,now,None),
-            (uuid4().hex,task_id,document_id,"chunking","文本切分",ParseStepStatus.QUEUED.value,
+            (uuid4().hex,task_id,document_id,ParseStepKey.CHUNKING.value,"文本切分",ParseStepStatus.WAITING.value,
              None,None,now,None),
         ],
     )
@@ -252,59 +323,207 @@ def set_step_status(task_id: str, step_key: str, status: ParseStepStatus, *, err
             """UPDATE parse_task_steps SET status=?,error=?,input_path=COALESCE(?,input_path),
             output_path=COALESCE(?,output_path),details=COALESCE(?,details),
             started_at=CASE WHEN ?=? THEN ? ELSE started_at END,
-            finished_at=CASE WHEN ? IN (?,?) THEN ? ELSE finished_at END
+            finished_at=CASE WHEN ? IN (?,?,?) THEN ? ELSE finished_at END
             WHERE task_id=? AND step_key=?""",
             (status_value,error,str(input_path) if input_path else None,str(output_path) if output_path else None,
              details,status_value,ParseStepStatus.PROCESSING.value,now,
-             status_value,ParseStepStatus.SUCCEEDED.value,ParseStepStatus.FAILED.value,now,task_id,step_key),
+             status_value,ParseStepStatus.SUCCEEDED.value,ParseStepStatus.FAILED.value,
+             ParseStepStatus.SKIPPED.value,now,task_id,step_key),
         )
 
 
-def ensure_chunking_step(task_id: str, document_id: str, input_path: Path) -> None:
-    """为旧解析任务补建切分步骤，重复调用不会创建重复记录。"""
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.execute(
-            """INSERT OR IGNORE INTO parse_task_steps
-            (id,task_id,document_id,step_key,title,status,input_path,created_at)
-            VALUES (?,?,?,'chunking','文本切分','queued',?,?)""",
-            (uuid4().hex,task_id,document_id,str(input_path),_now()),
-        )
-
-
-def mark_processing(task_id: str, document_id: str) -> bool:
+def claim_next_step() -> dict | None:
+    """以写事务原子领取一个排队步骤，避免多个 Worker 重复执行。"""
     now = _now()
-    with sqlite3.connect(settings.database_path) as connection:
-        cursor = connection.execute(
-            "UPDATE documents SET parsing_status=?,parse_error=NULL,updated_at=? WHERE id=? AND current_task_id=?",
-            (ParseStepStatus.MINERU_PARSING.value,now,document_id,task_id),
-        )
-        if cursor.rowcount == 0:
-            return False
-        connection.execute("UPDATE parse_tasks SET status=?,started_at=? WHERE id=?", (ParseStepStatus.PROCESSING.value,now,task_id))
-    return True
-
-
-def set_document_parse_status(task_id: str, document_id: str, status: ParseStepStatus) -> None:
-    """更新文档当前所处的解析阶段。"""
-    with sqlite3.connect(settings.database_path) as connection:
+    with sqlite3.connect(settings.database_path, timeout=30) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """SELECT step.* FROM parse_task_steps AS step
+            JOIN documents AS doc ON doc.id=step.document_id
+            WHERE step.status=? AND doc.current_task_id=step.task_id
+            ORDER BY step.created_at,step.rowid LIMIT 1""",
+            (ParseStepStatus.QUEUED.value,),
+        ).fetchone()
+        if row is None:
+            connection.commit()
+            return None
         connection.execute(
-            "UPDATE documents SET parsing_status=?,updated_at=? WHERE id=? AND current_task_id=?",
-            (status.value,_now(),document_id,task_id),
+            """UPDATE parse_task_steps SET status=?,started_at=?,finished_at=NULL,error=NULL
+            WHERE id=? AND status=?""",
+            (ParseStepStatus.PROCESSING.value,now,row["id"],ParseStepStatus.QUEUED.value),
         )
+        connection.execute(
+            """UPDATE parse_tasks SET status=?,started_at=COALESCE(started_at,?),finished_at=NULL,error=NULL
+            WHERE id=?""",
+            (ParseStepStatus.PROCESSING.value,now,row["task_id"]),
+        )
+        stage = {
+            ParseStepKey.MINERU_PARSE.value: ParseStepStatus.MINERU_PARSING.value,
+            ParseStepKey.CHUNKING.value: ParseStepStatus.CHUNKING.value,
+        }.get(row["step_key"], ParseStepStatus.PROCESSING.value)
+        connection.execute(
+            """UPDATE documents SET parsing_status=?,parse_error=NULL,updated_at=?
+            WHERE id=? AND current_task_id=?""",
+            (stage,now,row["document_id"],row["task_id"]),
+        )
+        claimed = dict(row)
+        connection.commit()
+    return claimed
 
 
-def finish_task(task_id: str, document_id: str, status: ParseStepStatus, error: str | None = None,
-                parsed_path: Path | None = None,
-                document_status: ParseStepStatus | None = None) -> None:
+def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str:
+    """将切分步骤排队；可用于已完成解析的旧文档补生成切分。"""
     now = _now()
-    document_status_value = (document_status or status).value
-    with sqlite3.connect(settings.database_path) as connection:
+    with sqlite3.connect(settings.database_path, timeout=30) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        document = connection.execute(
+            "SELECT current_task_id FROM documents WHERE id=?", (document_id,)
+        ).fetchone()
+        if document is None or document["current_task_id"] != task_id:
+            connection.rollback()
+            raise ValueError("文档当前解析任务已改变")
+        step = connection.execute(
+            "SELECT status,output_path FROM parse_task_steps WHERE task_id=? AND step_key=?",
+            (task_id,ParseStepKey.CHUNKING.value),
+        ).fetchone()
+        if step is None:
+            connection.execute(
+                """INSERT INTO parse_task_steps
+                (id,task_id,document_id,step_key,title,status,input_path,created_at)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (uuid4().hex,task_id,document_id,ParseStepKey.CHUNKING.value,"文本切分",
+                 ParseStepStatus.QUEUED.value,str(input_path),now),
+            )
+        elif (step["status"] == ParseStepStatus.SUCCEEDED.value and step["output_path"]
+              and Path(step["output_path"]).is_file()):
+            connection.commit()
+            return ParseStepStatus.SUCCEEDED.value
+        elif step["status"] == ParseStepStatus.PROCESSING.value:
+            connection.commit()
+            return ParseStepStatus.PROCESSING.value
+        else:
+            connection.execute(
+                """UPDATE parse_task_steps SET status=?,input_path=?,output_path=NULL,error=NULL,
+                started_at=NULL,finished_at=NULL WHERE task_id=? AND step_key=?""",
+                (ParseStepStatus.QUEUED.value,str(input_path),task_id,ParseStepKey.CHUNKING.value),
+            )
+        connection.execute(
+            """UPDATE parse_tasks SET status=?,error=NULL,started_at=NULL,finished_at=NULL WHERE id=?""",
+            (ParseStepStatus.QUEUED.value,task_id),
+        )
+        connection.execute(
+            """UPDATE documents SET parsing_status=?,parse_error=NULL,updated_at=?
+            WHERE id=? AND current_task_id=?""",
+            (ParseStepStatus.CHUNKING.value,now,document_id,task_id),
+        )
+        connection.commit()
+    return ParseStepStatus.QUEUED.value
+
+
+def complete_mineru_step(task_id: str, document_id: str, parsed_path: Path) -> None:
+    """原子完成 MinerU 步骤并把切分步骤转为可领取状态。"""
+    now = _now()
+    with sqlite3.connect(settings.database_path, timeout=30) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT 1 FROM documents WHERE id=? AND current_task_id=?", (document_id,task_id)
+        ).fetchone()
+        if current is None:
+            connection.execute(
+                """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+                WHERE task_id=? AND step_key=?""",
+                (ParseStepStatus.SKIPPED.value,"文档已切换到新的解析任务",now,task_id,ParseStepKey.MINERU_PARSE.value),
+            )
+            connection.execute(
+                """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+                WHERE task_id=? AND status IN (?,?)""",
+                (ParseStepStatus.SKIPPED.value,"文档已切换到新的解析任务",now,task_id,
+                 ParseStepStatus.QUEUED.value,ParseStepStatus.WAITING.value),
+            )
+            connection.execute(
+                "UPDATE parse_tasks SET status=?,error=?,finished_at=? WHERE id=?",
+                (ParseStepStatus.FAILED.value,"文档已切换到新的解析任务",now,task_id),
+            )
+            connection.commit()
+            return
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,output_path=?,error=NULL,finished_at=?
+            WHERE task_id=? AND step_key=?""",
+            (ParseStepStatus.SUCCEEDED.value,str(parsed_path),now,task_id,ParseStepKey.MINERU_PARSE.value),
+        )
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,input_path=?,error=NULL,started_at=NULL,finished_at=NULL
+            WHERE task_id=? AND step_key=? AND status IN (?,?)""",
+            (ParseStepStatus.QUEUED.value,str(parsed_path),task_id,ParseStepKey.CHUNKING.value,
+             ParseStepStatus.WAITING.value,ParseStepStatus.QUEUED.value),
+        )
+        connection.execute(
+            """UPDATE documents SET parsed_path=?,parsing_status=?,parse_error=NULL,updated_at=?
+            WHERE id=? AND current_task_id=?""",
+            (str(parsed_path),ParseStepStatus.CHUNKING.value,now,document_id,task_id),
+        )
+        connection.execute(
+            "UPDATE parse_tasks SET status=?,error=NULL WHERE id=?",
+            (ParseStepStatus.QUEUED.value,task_id),
+        )
+        connection.commit()
+
+
+def complete_chunking_step(task_id: str, document_id: str, chunks_path: Path,
+                           *, details: str | None = None) -> None:
+    """原子完成切分步骤及整个文档解析任务。"""
+    now = _now()
+    with sqlite3.connect(settings.database_path, timeout=30) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,output_path=?,details=COALESCE(?,details),error=NULL,finished_at=?
+            WHERE task_id=? AND step_key=?""",
+            (ParseStepStatus.SUCCEEDED.value,str(chunks_path),details,now,task_id,ParseStepKey.CHUNKING.value),
+        )
+        connection.execute(
+            "UPDATE parse_tasks SET status=?,error=NULL,finished_at=? WHERE id=?",
+            (ParseStepStatus.SUCCEEDED.value,now,task_id),
+        )
+        connection.execute(
+            """UPDATE documents SET parsing_status=?,parse_error=NULL,updated_at=?
+            WHERE id=? AND current_task_id=?""",
+            (ParseStepStatus.SUCCEEDED.value,now,document_id,task_id),
+        )
+        connection.commit()
+
+
+def fail_step(task_id: str, document_id: str, step_key: str, error: str) -> None:
+    """失败时终止当前任务并跳过所有依赖步骤。"""
+    now = _now()
+    document_status = {
+        ParseStepKey.MINERU_PARSE.value: ParseStepStatus.MINERU_FAILED.value,
+        ParseStepKey.CHUNKING.value: ParseStepStatus.CHUNKING_FAILED.value,
+        ParseStepKey.SOURCE_SAVED.value: ParseStepStatus.SOURCE_SAVE_FAILED.value,
+    }.get(step_key, ParseStepStatus.FAILED.value)
+    with sqlite3.connect(settings.database_path, timeout=30) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+            WHERE task_id=? AND step_key=?""",
+            (ParseStepStatus.FAILED.value,error,now,task_id,step_key),
+        )
+        connection.execute(
+            """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
+            WHERE task_id=? AND status IN (?,?)""",
+            (ParseStepStatus.SKIPPED.value,"上游步骤失败，未执行",now,task_id,
+             ParseStepStatus.QUEUED.value,ParseStepStatus.WAITING.value),
+        )
         connection.execute(
             "UPDATE parse_tasks SET status=?,error=?,finished_at=? WHERE id=?",
-            (status.value,error,now,task_id),
+            (ParseStepStatus.FAILED.value,error,now,task_id),
         )
         connection.execute(
-            """UPDATE documents SET parsing_status=?,parse_error=?,parsed_path=?,updated_at=?
+            """UPDATE documents SET parsing_status=?,parse_error=?,updated_at=?
             WHERE id=? AND current_task_id=?""",
-            (document_status_value,error,str(parsed_path) if parsed_path else None,now,document_id,task_id),
+            (document_status,error,now,document_id,task_id),
         )
+        connection.commit()
+
+
