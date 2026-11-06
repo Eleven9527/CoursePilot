@@ -40,7 +40,7 @@
       <section class="content">
         <div class="card">
           <div class="card-head"><h2>文档列表</h2><span class="muted" id="doc-count">加载中…</span></div>
-          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>解析状态</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="8" class="loading">正在读取文档…</td></tr></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>MinerU 解析状态</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="8" class="loading">正在读取文档…</td></tr></tbody></table></div>
         </div>
         <section class="card form-card">
           <h2 id="form-title">添加文档</h2><p class="form-intro" id="form-intro">上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。</p>
@@ -97,8 +97,8 @@
     async function loadDocuments(){
       try{documents=await request(API);document.querySelector('#doc-count').textContent=`共 ${documents.length} 份资料`;
         if(!documents.length){list.innerHTML='<tr><td colspan="8"><div class="empty"><strong>资料库还是空的</strong>从右侧上传第一份课程文档</div></td></tr>';return}
-        list.innerHTML=documents.map(doc=>{const state=doc.parsing_status||'not_started';const retry=['failed','source_save_failed','mineru_failed','chunking_failed','succeeded','not_started'].includes(state);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td><td><span class="parse-state state-${state}">${parseLabels[state]||'未知'}</span>${doc.parse_error?`<div class="parse-error" title="${escapeHtml(doc.parse_error)}">${escapeHtml(doc.parse_error)}</div>`:''}</td><td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions"><button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重试</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
-        if(documents.some(doc=>['queued','source_saved','processing','mineru_parsing','chunking'].includes(doc.parsing_status)))setTimeout(loadDocuments,2000);
+        list.innerHTML=documents.map(doc=>{const state=doc.parsing_status||'not_started';const retry=['failed','source_save_failed','mineru_failed','succeeded','not_started'].includes(state);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td><td><span class="parse-state state-${state}">${parseLabels[state]||'未知'}</span>${doc.parse_error?`<div class="parse-error" title="${escapeHtml(doc.parse_error)}">${escapeHtml(doc.parse_error)}</div>`:''}</td><td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions"><button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重试</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
+        if(documents.some(doc=>['queued','source_saved','processing','mineru_parsing'].includes(doc.parsing_status)))setTimeout(loadDocuments,2000);
       }catch(error){list.innerHTML=`<tr><td colspan="8" class="empty">${escapeHtml(error.message)}</td></tr>`;notify(error.message,true)}
     }
     function resetForm(){editingId=null;form.reset();rangeStart.value='1';rangeEnd.value='2';updateUnitRange();document.querySelector('#form-title').textContent='添加文档';document.querySelector('#form-intro').textContent='上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。';document.querySelector('#submit-button').textContent='添加到资料库';document.querySelector('#file').required=true;document.querySelector('#file-hint').textContent='支持 .pdf、.md、.markdown、.docx';document.querySelector('#cancel-button').hidden=true}
@@ -137,7 +137,7 @@
         document.querySelector('#source-column-title').textContent='原始文档';
         document.querySelector('#result-column-title').textContent='MinerU 解析文本';
         document.querySelector('#source-summary').textContent=`原始文件 · ${formatSize(doc.size_bytes)}`;
-        document.querySelector('#result-summary').textContent=`解析状态 · ${parseLabels[doc.parsing_status]||'未解析'}`;
+        document.querySelector('#result-summary').textContent=`MinerU 解析状态 · ${parseLabels[doc.parsing_status]||'未解析'}`;
         await renderOriginalSource(doc);
         if(activeReviewId!==doc.id||activeReviewStage!==stage)return;
         resultPane.innerHTML=reviewMarkdownText?`<pre>${escapeHtml(reviewMarkdownText)}</pre>`:`<div class="review-placeholder">${escapeHtml(reviewMarkdownError||doc.parse_error||'解析结果尚未生成。解析任务完成后，结果会保存在这里。')}</div>`;
@@ -192,7 +192,7 @@
     list.addEventListener('click', async event=>{
       const editButton=event.target.closest('[data-edit]');const deleteButton=event.target.closest('[data-delete]');const retryButton=event.target.closest('[data-retry]');const viewButton=event.target.closest('[data-view]');
       if(viewButton)await openReview(viewButton.dataset.view);
-      if(retryButton){retryButton.disabled=true;try{await request(`${API}/${retryButton.dataset.retry}/parse`,{method:'POST'});notify('解析任务已重新排队');await loadDocuments()}catch(error){notify(error.message,true)}finally{retryButton.disabled=false}}
+      if(retryButton){retryButton.disabled=true;try{await request(`${API}/${retryButton.dataset.retry}/parse`,{method:'POST'});notify('MinerU 解析已重新排队');await loadDocuments()}catch(error){notify(error.message,true)}finally{retryButton.disabled=false}}
       if(editButton){const doc=documents.find(item=>item.id===editButton.dataset.edit);if(!doc)return;editingId=doc.id;document.querySelector('#title').value=doc.title;document.querySelector('#grade').value=doc.grade||'未指定';const range=(doc.unit||'').match(/^第(\d+)-(\d+)单元$/);if(range){rangeEnabled.checked=true;rangeStart.value=range[1];rangeEnd.value=range[2];updateUnitRange()}else{rangeEnabled.checked=false;updateUnitRange();unitSelect.value=doc.unit||'未指定'}document.querySelector('#description').value=doc.description;document.querySelector('#form-title').textContent='编辑文档';document.querySelector('#form-intro').textContent=`当前文件：${doc.filename}。可以修改信息，也可以选择新文件替换。`;document.querySelector('#submit-button').textContent='保存修改';document.querySelector('#file').required=false;document.querySelector('#file-hint').textContent='不选文件则保留原文件';document.querySelector('#cancel-button').hidden=false;document.querySelector('#title').focus();}
       if(deleteButton){const doc=documents.find(item=>item.id===deleteButton.dataset.delete);if(!doc||!confirm(`确定删除“${doc.title}”及其上传文件吗？此操作无法撤销。`))return;try{await request(`${API}/${doc.id}`,{method:'DELETE'});if(editingId===doc.id)resetForm();notify('文档已删除');await loadDocuments()}catch(error){notify(error.message,true)}}
     });
