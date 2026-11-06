@@ -1,0 +1,9 @@
+my_agent/
+__pycache__/
+*.py[cod]
+.env
+.venv/
+data/
+.idea/
+.mineru-service.lock
+sources/*.pdf
