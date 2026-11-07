@@ -64,20 +64,19 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_parse_task_steps_task_key ON parse_task_steps(task_id,step_key)"
         )
-        if settings.database_url:
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS document_chunks (
-                    chunk_id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    task_id TEXT NOT NULL REFERENCES parse_tasks(id) ON DELETE CASCADE,
-                    chunk_index INTEGER NOT NULL,
-                    text TEXT NOT NULL,
-                    heading TEXT NOT NULL,
-                    char_count INTEGER NOT NULL,
-                    metadata JSONB NOT NULL,
-                    UNIQUE (task_id, chunk_index)
-                )"""
-            )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS document_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL REFERENCES parse_tasks(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                heading TEXT NOT NULL,
+                char_count INTEGER NOT NULL,
+                metadata TEXT NOT NULL,
+                UNIQUE (task_id, chunk_index)
+            )"""
+        )
         # 兼容曾把切分状态写入解析字段的文档。
         connection.execute(
             """UPDATE documents SET parsing_status='succeeded',parse_error=NULL
@@ -275,6 +274,7 @@ def delete_document(document_id: str) -> tuple[Path, Path | None] | None:
     parsed_path = Path(document["parsed_path"]) if document["parsed_path"] else None
     with connect() as connection:
         begin_write(connection)
+        connection.execute("DELETE FROM document_chunks WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM parse_tasks WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM parse_task_steps WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM documents WHERE id=?", (document_id,))
@@ -431,7 +431,7 @@ def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str
                 or document["parsed_path"] != str(input_path)):
             raise ValueError("当前任务的 MinerU 解析结果尚未生成")
         step = connection.execute(
-            "SELECT status,output_path FROM parse_task_steps WHERE task_id=? AND step_key=?",
+            "SELECT * FROM parse_task_steps WHERE task_id=? AND step_key=?",
             (task_id,ParseStepKey.CHUNKING.value),
         ).fetchone()
         if step is None:
@@ -442,8 +442,7 @@ def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str
                 (uuid4().hex,task_id,document_id,ParseStepKey.CHUNKING.value,"文本切分",
                  ParseStepStatus.QUEUED.value,str(input_path),now),
             )
-        elif (step["status"] == ParseStepStatus.SUCCEEDED.value and step["output_path"]
-              and Path(step["output_path"]).is_file()):
+        elif (step["status"] == ParseStepStatus.SUCCEEDED.value and json.loads(step["details"] or "{}").get("chunks_in_database")):
             connection.commit()
             return ParseStepStatus.SUCCEEDED.value
         elif step["status"] == ParseStepStatus.PROCESSING.value:
@@ -512,7 +511,82 @@ def complete_mineru_step(task_id: str, document_id: str, parsed_path: Path) -> N
         connection.commit()
 
 
-def complete_chunking_step(task_id: str, document_id: str, chunks_path: Path,
+def read_chunking_result(step: dict | None) -> list[dict] | None:
+    if not step or step["status"] != ParseStepStatus.SUCCEEDED.value:
+        return None
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT chunk_index,text,heading,char_count,metadata FROM document_chunks
+            WHERE task_id=? AND document_id=? ORDER BY chunk_index""",
+            (step["task_id"], step["document_id"]),
+        ).fetchall()
+    if rows:
+        return [
+            {**dict(row), "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]}
+            for row in rows
+        ]
+    if json.loads(step["details"] or "{}").get("chunks_in_database"):
+        return []
+    return None
+
+
+def migrate_chunk_files() -> int:
+    """先提交旧切分块，再清理数据库已收录的 JSONL。"""
+    imported = []
+    with connect() as connection:
+        begin_write(connection)
+        steps = connection.execute(
+            """SELECT step.* FROM parse_task_steps AS step
+            JOIN parse_tasks AS task ON task.id=step.task_id
+            JOIN documents AS doc ON doc.id=step.document_id
+            WHERE step.step_key=? AND step.status=? AND step.output_path IS NOT NULL""",
+            (ParseStepKey.CHUNKING.value, ParseStepStatus.SUCCEEDED.value),
+        ).fetchall()
+        for step in steps:
+            path = Path(step["output_path"])
+            expected = settings.parsed_dir.resolve() / step["task_id"] / "chunks.jsonl"
+            if not expected.is_relative_to(settings.parsed_dir.resolve()) or path.resolve() != expected or not path.is_file():
+                continue
+            with path.open(encoding="utf-8") as source:
+                chunks = [json.loads(line) for line in source if line.strip()]
+            details = json.loads(step["details"] or "{}")
+            if details.get("chunks_in_database"):
+                count = connection.execute(
+                    "SELECT COUNT(*) AS count FROM document_chunks WHERE task_id=?", (step["task_id"],)
+                ).fetchone()["count"]
+                if count != len(chunks):
+                    continue
+            else:
+                _store_chunks(connection, step["task_id"], step["document_id"], chunks)
+                details.update(chunk_count=len(chunks), chunks_in_database=True)
+                connection.execute(
+                    "UPDATE parse_task_steps SET details=? WHERE id=?", (json.dumps(details), step["id"])
+                )
+            imported.append((step["id"], path))
+    for step_id, path in imported:
+        path.unlink(missing_ok=True)
+        with connect() as connection:
+            connection.execute("UPDATE parse_task_steps SET output_path=NULL WHERE id=? AND output_path=?",
+                               (step_id, str(path)))
+    return len(imported)
+
+
+def _store_chunks(connection, task_id: str, document_id: str, chunks: list[dict]) -> None:
+    connection.execute("DELETE FROM document_chunks WHERE task_id=?", (task_id,))
+    connection.executemany(
+        """INSERT INTO document_chunks
+        (chunk_id,document_id,task_id,chunk_index,text,heading,char_count,metadata)
+        VALUES (?,?,?,?,?,?,?,?)""",
+        [
+            (f"{task_id}:{chunk['chunk_index']}", document_id, task_id, chunk["chunk_index"],
+             chunk["text"], chunk["heading"], chunk["char_count"],
+             json.dumps(chunk["metadata"], ensure_ascii=False))
+            for chunk in chunks
+        ],
+    )
+
+
+def complete_chunking_step(task_id: str, document_id: str,
                            *, chunks: list[dict]) -> None:
     """原子完成切分步骤及整个文档处理任务。"""
     now = _now()
@@ -526,24 +600,12 @@ def complete_chunking_step(task_id: str, document_id: str, chunks_path: Path,
         ).fetchone()
         if current is None:
             return
-        if settings.database_url:
-            connection.execute("DELETE FROM document_chunks WHERE task_id=?", (task_id,))
-            connection.executemany(
-                """INSERT INTO document_chunks
-                (chunk_id,document_id,task_id,chunk_index,text,heading,char_count,metadata)
-                VALUES (?,?,?,?,?,?,?,?::jsonb)""",
-                [
-                    (f"{task_id}:{chunk['chunk_index']}", document_id, task_id, chunk["chunk_index"],
-                     chunk["text"], chunk["heading"], chunk["char_count"],
-                     json.dumps(chunk["metadata"], ensure_ascii=False))
-                    for chunk in chunks
-                ],
-            )
-        details = json.dumps({"chunk_count": len(chunks)})
+        _store_chunks(connection, task_id, document_id, chunks)
+        details = json.dumps({"chunk_count": len(chunks), "chunks_in_database": True})
         connection.execute(
             """UPDATE parse_task_steps SET status=?,output_path=?,details=COALESCE(?,details),error=NULL,finished_at=?
             WHERE task_id=? AND step_key=?""",
-            (ParseStepStatus.SUCCEEDED.value,str(chunks_path),details,now,task_id,ParseStepKey.CHUNKING.value),
+            (ParseStepStatus.SUCCEEDED.value,None,details,now,task_id,ParseStepKey.CHUNKING.value),
         )
         connection.execute(
             "UPDATE parse_tasks SET status=?,error=NULL,finished_at=? WHERE id=?",

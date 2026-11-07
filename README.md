@@ -117,9 +117,9 @@ curl -X POST http://127.0.0.1:19530/v2/vectordb/collections/list -H "Content-Typ
 
 Windows PowerShell 中用 `curl.exe` 运行该命令。返回 `code: 0` 表示接口可用。应用配置了 Milvus 后也会在启动时执行同样的连接检查。
 
-PostgreSQL 的业务表由应用启动时创建。已有 SQLite 数据保留在 `data/documents.db`，配置 PostgreSQL 后应用会读取 PostgreSQL 中的记录。需要继续使用 SQLite 时将 `DATABASE_URL` 留空。上传文件、解析 Markdown 和切分 JSONL 继续保存在 `DATA_DIR`。
+PostgreSQL 的业务表由应用启动时创建。已有 SQLite 数据保留在 `data/documents.db`，配置 PostgreSQL 后应用会读取 PostgreSQL 中的记录。需要继续使用 SQLite 时将 `DATABASE_URL` 留空。上传文件和解析 Markdown 保存在 `DATA_DIR`，切分块写入当前数据库的 `document_chunks` 表。应用启动时会导入当前数据库所引用的旧切分 JSONL，并在入库后清理文件。
 
-Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集合维度由 Embedding 模型决定。当前切分流程仍以 JSONL 为产物，尚未接入自动生成 Embedding 的 Worker。MinerU 解析和文本切分各有一个 Worker，随 API 服务启动。
+Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集合维度由 Embedding 模型决定。当前尚未接入自动生成 Embedding 的 Worker。MinerU 解析和文本切分各有一个 Worker，随 API 服务启动。
 
 启动后可访问：
 
@@ -129,4 +129,4 @@ Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集�
 
 文档管理目前支持 PDF、Markdown 和 DOCX 文件的新增、信息编辑、文件替换与删除，并可选择适用年级（小学一年级至六年级、初一至初三、高一至高三）和单元（第 1 至第 20 单元，支持单个单元或连续范围，例如“第1-2单元”）。文档元数据和上传文件保存在项目根目录的 `data/` 下；该目录已加入 `.gitignore`。
 
-每次上传或重试都会保留解析任务和步骤状态；流程依次执行 MinerU 结构解析和文本切分。文档列表分别显示原文件、MinerU 解析和文本切分的状态。源文件、MinerU 日志、Markdown 解析结果及 JSONL 切分结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的解析任务；历史任务步骤记录保留在当前配置的数据库中。
+每次上传或重试都会保留解析任务和步骤状态；流程依次执行 MinerU 结构解析和文本切分。文档列表分别显示原文件、MinerU 解析和文本切分的状态。源文件、MinerU 日志、Markdown 解析结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的解析任务；历史任务步骤记录保留在当前配置的数据库中。
