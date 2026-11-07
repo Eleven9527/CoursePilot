@@ -359,7 +359,7 @@ def set_step_status(task_id: str, step_key: str, status: ParseStepStatus, *, err
         )
 
 
-def claim_next_step() -> dict | None:
+def claim_next_step(step_key: ParseStepKey) -> dict | None:
     """以写事务原子领取一个排队步骤，避免多个 Worker 重复执行。"""
     now = _now()
     with sqlite3.connect(settings.database_path, timeout=30) as connection:
@@ -368,9 +368,9 @@ def claim_next_step() -> dict | None:
         row = connection.execute(
             """SELECT step.* FROM parse_task_steps AS step
             JOIN documents AS doc ON doc.id=step.document_id
-            WHERE step.status=? AND doc.current_task_id=step.task_id
+            WHERE step.status=? AND step.step_key=? AND doc.current_task_id=step.task_id
             ORDER BY step.created_at,step.rowid LIMIT 1""",
-            (ParseStepStatus.QUEUED.value,),
+            (ParseStepStatus.QUEUED.value, step_key.value),
         ).fetchone()
         if row is None:
             connection.commit()

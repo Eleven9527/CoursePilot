@@ -37,9 +37,9 @@ def _process_chunking_step(step: dict) -> None:
     )
 
 
-def process_next_step() -> bool:
+def process_next_step(step_key: ParseStepKey) -> bool:
     """领取并处理一个排队步骤；没有任务时返回 False。"""
-    step = document_service.claim_next_step()
+    step = document_service.claim_next_step(step_key)
     if step is None:
         return False
     try:
@@ -69,12 +69,12 @@ def process_next_step() -> bool:
     return True
 
 
-def run_worker(stop_event: Event) -> None:
+def run_worker(stop_event: Event, step_key: ParseStepKey) -> None:
     """持续轮询 SQLite 队列；收到停止信号后在当前步骤结束后退出。"""
-    print("文档处理 Worker 已启动，等待数据库中的 queued 步骤…", flush=True)
+    print(f"文档处理 Worker [{step_key.value}] 已启动", flush=True)
     while not stop_event.is_set():
         try:
-            processed = process_next_step()
+            processed = process_next_step(step_key)
         except Exception as error:
             print(f"Worker 发生异常：{error}", flush=True)
             processed = False
