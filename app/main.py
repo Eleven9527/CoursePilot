@@ -8,12 +8,15 @@ from fastapi.responses import FileResponse
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.enums import ParseStepKey
+from app.rag.vector_store.milvus import list_collections
 from app.services.document_service import initialize_database, recover_interrupted_steps
 from app.services.worker_service import run_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if settings.milvus_uri:
+        list_collections()
     initialize_database()
     recover_interrupted_steps()
     stop_event = Event()

@@ -19,7 +19,7 @@ def parse_with_mineru(source: Path, task_id: str) -> Path:
     else:
         executable = shutil.which("mineru")
     if executable is None and not settings.mineru_executable:
-        local_executable = Path(sys.executable).with_name("mineru.exe")
+        local_executable = Path(sys.executable).with_name("mineru.exe" if sys.platform == "win32" else "mineru")
         if local_executable.is_file():
             executable = str(local_executable)
     if executable is None:
