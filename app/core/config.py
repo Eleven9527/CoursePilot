@@ -15,6 +15,9 @@ class Settings:
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
     reload: bool = os.getenv("RELOAD", "true").lower() == "true"
+    database_url: str = os.getenv('DATABASE_URL', '').strip()
+    milvus_uri: str = os.getenv('MILVUS_URI', '').strip()
+    milvus_token: str = os.getenv('MILVUS_TOKEN', '').strip()
     data_dir: Path = Path(os.getenv("DATA_DIR", "data"))
     mineru_executable: str = os.getenv("MINERU_EXECUTABLE", "").strip()
     mineru_tier_pdf: str = os.getenv("MINERU_TIER_PDF", "basic").strip()

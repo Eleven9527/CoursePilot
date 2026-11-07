@@ -1,10 +1,11 @@
 import json
-import sqlite3
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.database import begin_write, connect
 from app.core.enums import ParseStepKey, ParseStepStatus
 
 
@@ -16,8 +17,7 @@ def initialize_database() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.parsed_dir.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
+    with connect() as connection:
         connection.execute(
             """CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -28,7 +28,7 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             )"""
         )
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")} if not settings.database_url else set()
         migrations = {
             "grade": "TEXT NOT NULL DEFAULT '未指定'",
             "unit": "TEXT NOT NULL DEFAULT '未指定'",
@@ -38,7 +38,9 @@ def initialize_database() -> None:
             "current_task_id": "TEXT",
         }
         for name, definition in migrations.items():
-            if name not in columns:
+            if settings.database_url:
+                connection.execute(f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS {name} {definition}")
+            elif name not in columns:
                 connection.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
         connection.execute(
             """UPDATE documents SET grade = '未指定'
@@ -115,9 +117,9 @@ def initialize_database() -> None:
                 else ParseStepStatus.WAITING.value
             )
             connection.execute(
-                """INSERT OR IGNORE INTO parse_task_steps
+                """INSERT INTO parse_task_steps
                 (id,task_id,document_id,step_key,title,status,input_path,created_at)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (task_id,step_key) DO NOTHING""",
                 (uuid4().hex,document["current_task_id"],document["id"],ParseStepKey.CHUNKING.value,
                  "文本切分",initial_status,document["parsed_path"],_now()),
             )
@@ -139,7 +141,7 @@ def initialize_database() -> None:
 
 def recover_interrupted_steps() -> None:
     """Worker 启动时重新排队上次进程中断的步骤。"""
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         connection.execute(
             """UPDATE parse_task_steps SET status=?,started_at=NULL,error=NULL
             WHERE status=?""",
@@ -162,13 +164,13 @@ def recover_interrupted_steps() -> None:
 
 
 
-def _document(row: sqlite3.Row) -> dict:
+def _document(row: Mapping) -> dict:
     document = {key: row[key] for key in (
         "id", "title", "grade", "unit", "description", "filename", "stored_name", "file_type",
         "size_bytes", "parsing_status", "parse_error", "parsed_path", "current_task_id",
         "created_at", "updated_at",
     )}
-    document["steps"] = json.loads(row["steps"])
+    document["steps"] = json.loads(row["steps"]) if isinstance(row["steps"], str) else row["steps"]
     return document
 
 
@@ -180,30 +182,37 @@ _DOCUMENT_QUERY = """
     FROM documents AS doc
 """
 
+def _document_query() -> str:
+    if settings.database_url:
+        return _DOCUMENT_QUERY.replace(
+            "json_group_object(step_key, json_object('status', status, 'error', error))",
+            "COALESCE(json_object_agg(step_key, json_build_object('status', status, 'error', error)), '{}'::json)",
+        )
+    return _DOCUMENT_QUERY
+
+
 def list_documents() -> list[dict]:
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute(_DOCUMENT_QUERY + " ORDER BY doc.created_at DESC").fetchall()
+    with connect() as connection:
+        rows = connection.execute(_document_query() + " ORDER BY doc.created_at DESC").fetchall()
     return [_document(row) for row in rows]
 
 
 def get_document(document_id: str) -> dict | None:
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
-        row = connection.execute(_DOCUMENT_QUERY + " WHERE doc.id = ?", (document_id,)).fetchone()
+    with connect() as connection:
+        row = connection.execute(_document_query() + " WHERE doc.id = ?", (document_id,)).fetchone()
     return _document(row) if row else None
 
 
 def get_stored_path(document_id: str) -> Path | None:
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         row = connection.execute("SELECT stored_name FROM documents WHERE id = ?", (document_id,)).fetchone()
-    return settings.upload_dir / row[0] if row else None
+    return settings.upload_dir / row["stored_name"] if row else None
 
 
 def create_document(document_id: str, title: str, grade: str, unit: str, description: str,
                     filename: str, stored_name: str, file_type: str, size_bytes: int) -> dict:
     now, task_id = _now(), uuid4().hex
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         connection.execute(
             """INSERT INTO documents
             (id,title,grade,unit,description,filename,stored_name,file_type,size_bytes,parsing_status,current_task_id,created_at,updated_at)
@@ -225,7 +234,7 @@ def create_document(document_id: str, title: str, grade: str, unit: str, descrip
 def update_document(document_id: str, title: str, grade: str, unit: str, description: str,
                     replacement: tuple[str, str, str, int] | None = None) -> dict | None:
     now = _now()
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         if replacement:
             filename, stored_name, file_type, size_bytes = replacement
             connection.execute(
@@ -250,7 +259,7 @@ def delete_document(document_id: str) -> tuple[Path, Path | None] | None:
         return None
     stored_path = settings.upload_dir / document["stored_name"]
     parsed_path = Path(document["parsed_path"]) if document["parsed_path"] else None
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         connection.execute("DELETE FROM parse_tasks WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM parse_task_steps WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM documents WHERE id=?", (document_id,))
@@ -259,9 +268,8 @@ def delete_document(document_id: str) -> tuple[Path, Path | None] | None:
 
 def queue_parse(document_id: str, force: bool = False) -> str | None:
     now, task_id = _now(), uuid4().hex
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         row = connection.execute(
             """SELECT doc.parsing_status,doc.stored_name,doc.current_task_id,task.status AS processing_status
             FROM documents AS doc LEFT JOIN parse_tasks AS task ON task.id=doc.current_task_id
@@ -304,13 +312,12 @@ def queue_parse(document_id: str, force: bool = False) -> str | None:
 
 
 def get_task(task_id: str) -> dict | None:
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
+    with connect() as connection:
         row = connection.execute("SELECT * FROM parse_tasks WHERE id=?", (task_id,)).fetchone()
     return dict(row) if row else None
 
 
-def _insert_steps(connection: sqlite3.Connection, task_id: str, document_id: str,
+def _insert_steps(connection, task_id: str, document_id: str,
                   source_path: Path, now: str) -> None:
     connection.executemany(
         """INSERT INTO parse_task_steps
@@ -331,10 +338,9 @@ def get_document_steps(document_id: str) -> list[dict]:
     document = get_document(document_id)
     if document is None or not document["current_task_id"]:
         return []
-    with sqlite3.connect(settings.database_path) as connection:
-        connection.row_factory = sqlite3.Row
+    with connect() as connection:
         rows = connection.execute(
-            "SELECT * FROM parse_task_steps WHERE task_id=? ORDER BY created_at, rowid",
+            "SELECT * FROM parse_task_steps WHERE task_id=? ORDER BY created_at, CASE step_key WHEN 'source_saved' THEN 0 WHEN 'mineru_parse' THEN 1 ELSE 2 END",
             (document["current_task_id"],),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -345,7 +351,7 @@ def set_step_status(task_id: str, step_key: str, status: ParseStepStatus, *, err
                     details: str | None = None) -> None:
     now = _now()
     status_value = status.value
-    with sqlite3.connect(settings.database_path) as connection:
+    with connect() as connection:
         connection.execute(
             """UPDATE parse_task_steps SET status=?,error=?,input_path=COALESCE(?,input_path),
             output_path=COALESCE(?,output_path),details=COALESCE(?,details),
@@ -362,14 +368,13 @@ def set_step_status(task_id: str, step_key: str, status: ParseStepStatus, *, err
 def claim_next_step(step_key: ParseStepKey) -> dict | None:
     """以写事务原子领取一个排队步骤，避免多个 Worker 重复执行。"""
     now = _now()
-    with sqlite3.connect(settings.database_path, timeout=30) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         row = connection.execute(
             """SELECT step.* FROM parse_task_steps AS step
             JOIN documents AS doc ON doc.id=step.document_id
             WHERE step.status=? AND step.step_key=? AND doc.current_task_id=step.task_id
-            ORDER BY step.created_at,step.rowid LIMIT 1""",
+            ORDER BY step.created_at,step.id LIMIT 1""",
             (ParseStepStatus.QUEUED.value, step_key.value),
         ).fetchone()
         if row is None:
@@ -399,9 +404,8 @@ def claim_next_step(step_key: ParseStepKey) -> dict | None:
 def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str:
     """将切分步骤排队；可用于已完成解析的旧文档补生成切分。"""
     now = _now()
-    with sqlite3.connect(settings.database_path, timeout=30) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         document = connection.execute(
             "SELECT current_task_id,parsing_status,parsed_path FROM documents WHERE id=?", (document_id,)
         ).fetchone()
@@ -419,7 +423,7 @@ def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str
             connection.execute(
                 """INSERT INTO parse_task_steps
                 (id,task_id,document_id,step_key,title,status,input_path,created_at)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (task_id,step_key) DO NOTHING""",
                 (uuid4().hex,task_id,document_id,ParseStepKey.CHUNKING.value,"文本切分",
                  ParseStepStatus.QUEUED.value,str(input_path),now),
             )
@@ -447,8 +451,8 @@ def queue_chunking_step(task_id: str, document_id: str, input_path: Path) -> str
 def complete_mineru_step(task_id: str, document_id: str, parsed_path: Path) -> None:
     """原子完成 MinerU 步骤并把切分步骤转为可领取状态。"""
     now = _now()
-    with sqlite3.connect(settings.database_path, timeout=30) as connection:
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         current = connection.execute(
             "SELECT 1 FROM documents WHERE id=? AND current_task_id=?", (document_id,task_id)
         ).fetchone()
@@ -497,8 +501,8 @@ def complete_chunking_step(task_id: str, document_id: str, chunks_path: Path,
                            *, details: str | None = None) -> None:
     """原子完成切分步骤及整个文档处理任务。"""
     now = _now()
-    with sqlite3.connect(settings.database_path, timeout=30) as connection:
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         connection.execute(
             """UPDATE parse_task_steps SET status=?,output_path=?,details=COALESCE(?,details),error=NULL,finished_at=?
             WHERE task_id=? AND step_key=?""",
@@ -518,8 +522,8 @@ def fail_step(task_id: str, document_id: str, step_key: str, error: str) -> None
         ParseStepKey.MINERU_PARSE.value: ParseStepStatus.MINERU_FAILED.value,
         ParseStepKey.SOURCE_SAVED.value: ParseStepStatus.SOURCE_SAVE_FAILED.value,
     }.get(step_key, ParseStepStatus.FAILED.value)
-    with sqlite3.connect(settings.database_path, timeout=30) as connection:
-        connection.execute("BEGIN IMMEDIATE")
+    with connect() as connection:
+        begin_write(connection)
         connection.execute(
             """UPDATE parse_task_steps SET status=?,error=?,finished_at=?
             WHERE task_id=? AND step_key=?""",
