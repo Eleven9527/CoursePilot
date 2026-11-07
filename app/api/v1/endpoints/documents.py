@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 from uuid import uuid4
 from html import escape
-import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -147,10 +146,8 @@ def get_document_chunks(document_id: str) -> JSONResponse:
         raise HTTPException(404, "文档不存在")
     steps = document_service.get_document_steps(document_id)
     chunk_step = next((step for step in steps if step["step_key"] == ParseStepKey.CHUNKING.value), None)
-    chunks_path = Path(chunk_step["output_path"]) if chunk_step and chunk_step["output_path"] else None
-    if chunks_path is not None and chunks_path.is_file():
-        with chunks_path.open(encoding="utf-8") as chunks_file:
-            chunks = [json.loads(line) for line in chunks_file if line.strip()]
+    chunks = document_service.read_chunking_result(chunk_step)
+    if chunks is not None:
         return JSONResponse({"document_id": document_id, "status": ParseStepStatus.SUCCEEDED.value,
                              "chunk_count": len(chunks), "chunks": chunks})
     if not document["parsed_path"]:
@@ -170,22 +167,19 @@ def generate_document_chunks(document_id: str) -> JSONResponse:
     document = document_service.get_document(document_id)
     if document is None:
         raise HTTPException(404, "文档不存在")
-    parsed_path = Path(document["parsed_path"]) if document["parsed_path"] else None
-    if parsed_path is None or not parsed_path.is_file():
-        raise HTTPException(409, "Markdown 解析结果尚未生成，无法切分")
     task_id = document["current_task_id"]
     if not task_id:
         raise HTTPException(409, "文档没有可关联的解析任务")
 
     steps = document_service.get_document_steps(document_id)
     chunk_step = next((step for step in steps if step["step_key"] == ParseStepKey.CHUNKING.value), None)
-    if chunk_step and chunk_step["status"] == ParseStepStatus.SUCCEEDED.value and chunk_step["output_path"]:
-        existing_path = Path(chunk_step["output_path"])
-        if existing_path.is_file():
-            with existing_path.open(encoding="utf-8") as chunks_file:
-                chunks = [json.loads(line) for line in chunks_file if line.strip()]
-            return JSONResponse({"document_id": document_id, "status": ParseStepStatus.SUCCEEDED.value,
-                                 "chunk_count": len(chunks), "chunks": chunks})
+    chunks = document_service.read_chunking_result(chunk_step)
+    if chunks is not None:
+        return JSONResponse({"document_id": document_id, "status": ParseStepStatus.SUCCEEDED.value,
+                             "chunk_count": len(chunks), "chunks": chunks})
+    parsed_path = Path(document["parsed_path"]) if document["parsed_path"] else None
+    if parsed_path is None or not parsed_path.is_file():
+        raise HTTPException(409, "Markdown 解析结果尚未生成，无法切分")
     try:
         queued_status = document_service.queue_chunking_step(task_id, document_id, parsed_path)
     except ValueError as exc:
@@ -203,6 +197,8 @@ def get_parse_steps(document_id: str) -> list[dict]:
         artifact_url = None
         if step["step_key"] == ParseStepKey.SOURCE_SAVED.value:
             artifact_url = f"{settings.api_prefix}/documents/{document_id}/source"
+        elif step["step_key"] == ParseStepKey.CHUNKING.value and step["status"] == ParseStepStatus.SUCCEEDED.value:
+            artifact_url = f"{settings.api_prefix}/documents/{document_id}/chunks"
         elif step["output_path"] and Path(step["output_path"]).is_file():
             artifact = "chunks" if step["step_key"] == "chunking" else "result"
             artifact_url = f"{settings.api_prefix}/documents/{document_id}/{artifact}"

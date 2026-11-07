@@ -60,7 +60,7 @@ def _read_sections(markdown: str, limit: int) -> list[tuple[str, str]]:
     return expanded
 
 
-def create_chunks(markdown_path: Path, document: dict, task_id: str) -> Path:
+def create_chunks(markdown_path: Path, document: dict) -> list[dict]:
     """按标题和段落边界生成重叠文本块，并以 JSONL 持久化。"""
     chunk_size = settings.chunk_size
     overlap = settings.chunk_overlap
@@ -112,9 +112,4 @@ def create_chunks(markdown_path: Path, document: dict, task_id: str) -> Path:
             current_text = candidate
     save_current()
 
-    output_path = settings.parsed_dir / task_id / "chunks.jsonl"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as output:
-        for chunk in chunks:
-            output.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-    return output_path
+    return chunks
