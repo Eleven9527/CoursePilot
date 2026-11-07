@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class DocumentStepState(BaseModel):
+    status: str
+    error: str | None = None
 
 
 class DocumentResponse(BaseModel):
@@ -12,6 +17,7 @@ class DocumentResponse(BaseModel):
     filename: str
     file_type: str
     size_bytes: int
+    steps: dict[str, DocumentStepState] = Field(default_factory=dict)
     parsing_status: str
     parse_error: str | None = None
     current_task_id: str | None = None

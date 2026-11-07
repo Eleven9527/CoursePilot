@@ -40,7 +40,7 @@
       <section class="content">
         <div class="card">
           <div class="card-head"><h2>文档列表</h2><span class="muted" id="doc-count">加载中…</span></div>
-          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>MinerU 解析状态</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="8" class="loading">正在读取文档…</td></tr></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>原文件</th><th>MinerU 解析</th><th>文本切分</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="10" class="loading">正在读取文档…</td></tr></tbody></table></div>
         </div>
         <section class="card form-card">
           <h2 id="form-title">添加文档</h2><p class="form-intro" id="form-intro">上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。</p>
@@ -81,6 +81,13 @@
     const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const formatSize = bytes => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     const formatDate = value => new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+    const documentStepKeys = ['source_saved', 'mineru_parse', 'chunking'];
+    const hasActiveStep = doc => Object.values(doc.steps || {}).some(step => ['queued', 'processing'].includes(step.status));
+    function renderStepCell(step) {
+      const state = step?.status || 'not_started';
+      const error = step?.error ? escapeHtml(step.error) : '';
+      return `<td><span class="parse-state state-${escapeHtml(state)}">${step ? parseLabels[state] || '未知' : '未开始'}</span>${error ? `<div class="parse-error" title="${error}">${error}</div>` : ''}</td>`;
+    }
     const parseLabels={queued:'排队中',waiting:'等待上一步',skipped:'已跳过',source_saved:'原始文件已保存',source_save_failed:'原始文件保存失败',processing:'处理中',mineru_parsing:'MinerU 解析中',mineru_failed:'MinerU 解析失败',chunking:'文本切分中',chunking_failed:'文本切分失败',succeeded:'已完成',failed:'失败',not_started:'未解析'};
     const unitSelect=document.querySelector('#unit');
     for(let i=1;i<=20;i++){const option=document.createElement('option');option.value=`第${i}单元`;option.textContent=`第${i}单元`;unitSelect.append(option)}
@@ -96,10 +103,10 @@
     async function request(url, options={}){const response=await fetch(url,options);if(!response.ok){let message='操作失败';try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
     async function loadDocuments(){
       try{documents=await request(API);document.querySelector('#doc-count').textContent=`共 ${documents.length} 份资料`;
-        if(!documents.length){list.innerHTML='<tr><td colspan="8"><div class="empty"><strong>资料库还是空的</strong>从右侧上传第一份课程文档</div></td></tr>';return}
-        list.innerHTML=documents.map(doc=>{const state=doc.parsing_status||'not_started';const retry=['failed','source_save_failed','mineru_failed','succeeded','not_started'].includes(state);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td><td><span class="parse-state state-${state}">${parseLabels[state]||'未知'}</span>${doc.parse_error?`<div class="parse-error" title="${escapeHtml(doc.parse_error)}">${escapeHtml(doc.parse_error)}</div>`:''}</td><td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions"><button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重试</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
-        if(documents.some(doc=>['queued','source_saved','processing','mineru_parsing'].includes(doc.parsing_status)))setTimeout(loadDocuments,2000);
-      }catch(error){list.innerHTML=`<tr><td colspan="8" class="empty">${escapeHtml(error.message)}</td></tr>`;notify(error.message,true)}
+        if(!documents.length){list.innerHTML='<tr><td colspan="10"><div class="empty"><strong>资料库还是空的</strong>从右侧上传第一份课程文档</div></td></tr>';return}
+        list.innerHTML=documents.map(doc=>{const retry=!hasActiveStep(doc);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td>${documentStepKeys.map(key => renderStepCell(doc.steps?.[key])).join('')}<td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions"><button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重新解析</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
+        if(documents.some(hasActiveStep))setTimeout(loadDocuments,2000);
+      }catch(error){list.innerHTML=`<tr><td colspan="10" class="empty">${escapeHtml(error.message)}</td></tr>`;notify(error.message,true)}
     }
     function resetForm(){editingId=null;form.reset();rangeStart.value='1';rangeEnd.value='2';updateUnitRange();document.querySelector('#form-title').textContent='添加文档';document.querySelector('#form-intro').textContent='上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。';document.querySelector('#submit-button').textContent='添加到资料库';document.querySelector('#file').required=true;document.querySelector('#file-hint').textContent='支持 .pdf、.md、.markdown、.docx';document.querySelector('#cancel-button').hidden=true}
     function updateReviewStepStatuses(steps=[]){

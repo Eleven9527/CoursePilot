@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,24 +163,34 @@ def recover_interrupted_steps() -> None:
 
 
 def _document(row: sqlite3.Row) -> dict:
-    return {key: row[key] for key in (
+    document = {key: row[key] for key in (
         "id", "title", "grade", "unit", "description", "filename", "stored_name", "file_type",
         "size_bytes", "parsing_status", "parse_error", "parsed_path", "current_task_id",
         "created_at", "updated_at",
     )}
+    document["steps"] = json.loads(row["steps"])
+    return document
 
+
+_DOCUMENT_QUERY = """
+    SELECT doc.*, (
+        SELECT json_group_object(step_key, json_object('status', status, 'error', error))
+        FROM parse_task_steps WHERE task_id=doc.current_task_id AND document_id=doc.id
+    ) AS steps
+    FROM documents AS doc
+"""
 
 def list_documents() -> list[dict]:
     with sqlite3.connect(settings.database_path) as connection:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
+        rows = connection.execute(_DOCUMENT_QUERY + " ORDER BY doc.created_at DESC").fetchall()
     return [_document(row) for row in rows]
 
 
 def get_document(document_id: str) -> dict | None:
     with sqlite3.connect(settings.database_path) as connection:
         connection.row_factory = sqlite3.Row
-        row = connection.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        row = connection.execute(_DOCUMENT_QUERY + " WHERE doc.id = ?", (document_id,)).fetchone()
     return _document(row) if row else None
 
 
