@@ -30,10 +30,10 @@ def _process_chunking_step(step: dict) -> None:
         raise FileNotFoundError("MinerU Markdown 解析结果不存在")
     chunks_path = create_chunks(source, document, step["task_id"])
     with chunks_path.open(encoding="utf-8") as chunks_file:
-        chunk_count = sum(1 for _ in chunks_file)
+        chunks = [json.loads(line) for line in chunks_file if line.strip()]
     document_service.complete_chunking_step(
         step["task_id"], step["document_id"], chunks_path,
-        details=json.dumps({"chunk_count": chunk_count}, ensure_ascii=False),
+        chunks=chunks,
     )
 
 
