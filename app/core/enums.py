@@ -24,3 +24,4 @@ class ParseStepKey(StrEnum):
     SOURCE_SAVED = "source_saved"  # 原始文件保存
     MINERU_PARSE = "mineru_parse"  # MinerU 结构解析
     CHUNKING = "chunking"  # 文本切分
+    EMBEDDING = "embedding"  # 向量化

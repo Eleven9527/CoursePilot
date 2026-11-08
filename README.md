@@ -119,7 +119,7 @@ Windows PowerShell 中用 `curl.exe` 运行该命令。返回 `code: 0` 表示�
 
 PostgreSQL 的业务表由应用启动时创建。已有 SQLite 数据保留在 `data/documents.db`，配置 PostgreSQL 后应用会读取 PostgreSQL 中的记录。需要继续使用 SQLite 时将 `DATABASE_URL` 留空。上传文件和解析 Markdown 保存在 `DATA_DIR`，切分块写入当前数据库的 `document_chunks` 表。应用启动时会导入当前数据库所引用的旧切分 JSONL，并在入库后清理文件。
 
-Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集合维度由 Embedding 模型决定。当前尚未接入自动生成 Embedding 的 Worker。MinerU 解析和文本切分各有一个 Worker，随 API 服务启动。
+Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集合维度由 Embedding 模型决定。配置 `EMBEDDING_BASE_URL`（通常以 `/v1` 结尾）、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION` 和 `MILVUS_URI` 后，API 启动时会同时启动向量化 Worker。服务要求鉴权时填写 `EMBEDDING_API_KEY`。向量化读取已入库的切分块，每批最多 16 块，使用稳定的块 ID 写入 Milvus。启动时也会为当前已切分、尚未向量化的文档补排任务。向量化失败后可在管理页单独重试。
 
 启动后可访问：
 

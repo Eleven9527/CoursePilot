@@ -345,6 +345,8 @@ def _insert_steps(connection, task_id: str, document_id: str,
              str(source_path),None,now,None),
             (uuid4().hex,task_id,document_id,ParseStepKey.CHUNKING.value,"文本切分",ParseStepStatus.WAITING.value,
              None,None,now,None),
+            *([(uuid4().hex,task_id,document_id,ParseStepKey.EMBEDDING.value,"向量化",
+                ParseStepStatus.WAITING.value,None,None,now,None)] if settings.embedding_enabled else []),
         ],
     )
 
@@ -607,11 +609,83 @@ def complete_chunking_step(task_id: str, document_id: str,
             WHERE task_id=? AND step_key=?""",
             (ParseStepStatus.SUCCEEDED.value,None,details,now,task_id,ParseStepKey.CHUNKING.value),
         )
-        connection.execute(
-            "UPDATE parse_tasks SET status=?,error=NULL,finished_at=? WHERE id=?",
-            (ParseStepStatus.SUCCEEDED.value,now,task_id),
-        )
+        if settings.embedding_enabled:
+            _queue_embedding(connection, task_id, document_id)
+        else:
+            connection.execute(
+                "UPDATE parse_tasks SET status=?,error=NULL,finished_at=? WHERE id=?",
+                (ParseStepStatus.SUCCEEDED.value,now,task_id),
+            )
         connection.commit()
+
+
+def _queue_embedding(connection, task_id: str, document_id: str) -> None:
+    connection.execute(
+        """INSERT INTO parse_task_steps (id,task_id,document_id,step_key,title,status,created_at)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT (task_id,step_key) DO UPDATE
+        SET status=excluded.status,error=NULL,started_at=NULL,finished_at=NULL,details=NULL""",
+        (uuid4().hex,task_id,document_id,ParseStepKey.EMBEDDING.value,"向量化",ParseStepStatus.QUEUED.value,_now()),
+    )
+    connection.execute("UPDATE parse_tasks SET status=?,error=NULL,finished_at=NULL WHERE id=?",
+                       (ParseStepStatus.QUEUED.value,task_id))
+
+
+def queue_existing_embeddings() -> None:
+    with connect() as connection:
+        begin_write(connection)
+        steps = connection.execute(
+            """SELECT chunk.task_id,chunk.document_id FROM parse_task_steps AS chunk
+            JOIN documents AS doc ON doc.id=chunk.document_id AND doc.current_task_id=chunk.task_id
+            WHERE chunk.step_key=? AND chunk.status=? AND NOT EXISTS (
+                SELECT 1 FROM parse_task_steps AS embedding WHERE embedding.task_id=chunk.task_id
+                AND embedding.step_key=? AND embedding.status!=?
+            )""",
+            (ParseStepKey.CHUNKING.value,ParseStepStatus.SUCCEEDED.value,
+             ParseStepKey.EMBEDDING.value,ParseStepStatus.WAITING.value),
+        ).fetchall()
+        for step in steps:
+            _queue_embedding(connection, step["task_id"], step["document_id"])
+
+
+def retry_embedding(document_id: str) -> bool:
+    with connect() as connection:
+        begin_write(connection)
+        step = connection.execute(
+            """SELECT step.task_id FROM parse_task_steps AS step
+            JOIN documents AS doc ON doc.id=step.document_id AND doc.current_task_id=step.task_id
+            WHERE doc.id=? AND step.step_key=? AND step.status=?""",
+            (document_id,ParseStepKey.EMBEDDING.value,ParseStepStatus.FAILED.value),
+        ).fetchone()
+        if step is None:
+            return False
+        _queue_embedding(connection, step["task_id"], document_id)
+        return True
+
+
+def get_embedding_chunks(task_id: str, document_id: str) -> list[dict]:
+    with connect() as connection:
+        return [dict(row) for row in connection.execute(
+            """SELECT chunk_id,text FROM document_chunks
+            WHERE task_id=? AND document_id=? ORDER BY chunk_index""",
+            (task_id,document_id),
+        ).fetchall()]
+
+
+def complete_embedding_step(task_id: str, document_id: str, count: int) -> None:
+    with connect() as connection:
+        begin_write(connection)
+        now = _now()
+        updated = connection.execute(
+            """UPDATE parse_task_steps SET status=?,details=?,error=NULL,finished_at=?
+            WHERE task_id=? AND document_id=? AND step_key=? AND status=? AND EXISTS (
+                SELECT 1 FROM documents WHERE id=? AND current_task_id=?
+            )""",
+            (ParseStepStatus.SUCCEEDED.value,json.dumps({"vector_count": count}),now,
+             task_id,document_id,ParseStepKey.EMBEDDING.value,ParseStepStatus.PROCESSING.value,document_id,task_id),
+        )
+        if updated.rowcount:
+            connection.execute("UPDATE parse_tasks SET status=?,error=NULL,finished_at=? WHERE id=?",
+                               (ParseStepStatus.SUCCEEDED.value,now,task_id))
 
 
 def fail_step(task_id: str, document_id: str, step_key: str, error: str) -> None:
@@ -638,7 +712,7 @@ def fail_step(task_id: str, document_id: str, step_key: str, error: str) -> None
             "UPDATE parse_tasks SET status=?,error=?,finished_at=? WHERE id=?",
             (ParseStepStatus.FAILED.value,error,now,task_id),
         )
-        if step_key != ParseStepKey.CHUNKING.value:
+        if step_key in {ParseStepKey.MINERU_PARSE.value, ParseStepKey.SOURCE_SAVED.value}:
             connection.execute(
                 """UPDATE documents SET parsing_status=?,parse_error=?,updated_at=?
                 WHERE id=? AND current_task_id=?""",

@@ -40,7 +40,7 @@
       <section class="content">
         <div class="card">
           <div class="card-head"><h2>文档列表</h2><span class="muted" id="doc-count">加载中…</span></div>
-          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>原文件</th><th>MinerU 解析</th><th>文本切分</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="10" class="loading">正在读取文档…</td></tr></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>原文件</th><th>MinerU 解析</th><th>文本切分</th><th>向量化</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="document-list"><tr><td colspan="11" class="loading">正在读取文档…</td></tr></tbody></table></div>
         </div>
         <section class="card form-card">
           <h2 id="form-title">添加文档</h2><p class="form-intro" id="form-intro">上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。</p>
@@ -81,7 +81,7 @@
     const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const formatSize = bytes => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     const formatDate = value => new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
-    const documentStepKeys = ['source_saved', 'mineru_parse', 'chunking'];
+    const documentStepKeys = ['source_saved', 'mineru_parse', 'chunking', 'embedding'];
     const hasActiveStep = doc => Object.values(doc.steps || {}).some(step => ['queued', 'processing'].includes(step.status));
     function renderStepCell(step) {
       const state = step?.status || 'not_started';
@@ -103,10 +103,10 @@
     async function request(url, options={}){const response=await fetch(url,options);if(!response.ok){let message='操作失败';try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
     async function loadDocuments(){
       try{documents=await request(API);document.querySelector('#doc-count').textContent=`共 ${documents.length} 份资料`;
-        if(!documents.length){list.innerHTML='<tr><td colspan="10"><div class="empty"><strong>资料库还是空的</strong>从右侧上传第一份课程文档</div></td></tr>';return}
-        list.innerHTML=documents.map(doc=>{const retry=!hasActiveStep(doc);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td>${documentStepKeys.map(key => renderStepCell(doc.steps?.[key])).join('')}<td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions"><button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重新解析</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
+        if(!documents.length){list.innerHTML='<tr><td colspan="11"><div class="empty"><strong>资料库还是空的</strong>从右侧上传第一份课程文档</div></td></tr>';return}
+        list.innerHTML=documents.map(doc=>{const retry=!hasActiveStep(doc);return `<tr><td><div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title)}</div><div class="muted">${escapeHtml(doc.filename)}</div></td><td>${escapeHtml(doc.grade||'未指定')}</td><td>${escapeHtml(doc.unit||'未指定')}</td><td><span class="file-badge">${escapeHtml(doc.file_type)}</span></td>${documentStepKeys.map(key => renderStepCell(doc.steps?.[key])).join('')}<td>${formatSize(doc.size_bytes)}</td><td>${formatDate(doc.created_at)}</td><td class="actions">${doc.steps?.embedding?.status === 'failed' ? `<button class="btn btn-quiet btn-small" data-retry-embedding="${doc.id}">重试向量化</button>` : ''}<button class="btn btn-quiet btn-small" data-view="${doc.id}">校验</button>${retry?`<button class="btn btn-quiet btn-small" data-retry="${doc.id}">重新解析</button>`:''}<button class="btn btn-quiet btn-small" data-edit="${doc.id}">编辑</button><button class="btn btn-danger btn-small" data-delete="${doc.id}">删除</button></td></tr>`}).join('');
         if(documents.some(hasActiveStep))setTimeout(loadDocuments,2000);
-      }catch(error){list.innerHTML=`<tr><td colspan="10" class="empty">${escapeHtml(error.message)}</td></tr>`;notify(error.message,true)}
+      }catch(error){list.innerHTML=`<tr><td colspan="11" class="empty">${escapeHtml(error.message)}</td></tr>`;notify(error.message,true)}
     }
     function resetForm(){editingId=null;form.reset();rangeStart.value='1';rangeEnd.value='2';updateUnitRange();document.querySelector('#form-title').textContent='添加文档';document.querySelector('#form-intro').textContent='上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。';document.querySelector('#submit-button').textContent='添加到资料库';document.querySelector('#file').required=true;document.querySelector('#file-hint').textContent='支持 .pdf、.md、.markdown、.docx';document.querySelector('#cancel-button').hidden=true}
     function updateReviewStepStatuses(steps=[]){
@@ -197,7 +197,15 @@
       const button=event.target.closest('[data-review-stage]');if(button)renderReviewStage(button.dataset.reviewStage);
     });
     list.addEventListener('click', async event=>{
-      const editButton=event.target.closest('[data-edit]');const deleteButton=event.target.closest('[data-delete]');const retryButton=event.target.closest('[data-retry]');const viewButton=event.target.closest('[data-view]');
+      const editButton=event.target.closest('[data-edit]');const deleteButton=event.target.closest('[data-delete]');const embeddingRetry=event.target.closest('[data-retry-embedding]');
+      if(embeddingRetry){
+        embeddingRetry.disabled=true;
+        try{await request(`${API}/${embeddingRetry.dataset.retryEmbedding}/embedding/retry`,{method:'POST'});await loadDocuments()}
+        catch(error){notify(error.message,true)}
+        finally{embeddingRetry.disabled=false}
+        return;
+      }
+      const retryButton=event.target.closest('[data-retry]');const viewButton=event.target.closest('[data-view]');
       if(viewButton)await openReview(viewButton.dataset.view);
       if(retryButton){retryButton.disabled=true;try{await request(`${API}/${retryButton.dataset.retry}/parse`,{method:'POST'});notify('MinerU 解析已重新排队');await loadDocuments()}catch(error){notify(error.message,true)}finally{retryButton.disabled=false}}
       if(editButton){const doc=documents.find(item=>item.id===editButton.dataset.edit);if(!doc)return;editingId=doc.id;document.querySelector('#title').value=doc.title;document.querySelector('#grade').value=doc.grade||'未指定';const range=(doc.unit||'').match(/^第(\d+)-(\d+)单元$/);if(range){rangeEnabled.checked=true;rangeStart.value=range[1];rangeEnd.value=range[2];updateUnitRange()}else{rangeEnabled.checked=false;updateUnitRange();unitSelect.value=doc.unit||'未指定'}document.querySelector('#description').value=doc.description;document.querySelector('#form-title').textContent='编辑文档';document.querySelector('#form-intro').textContent=`当前文件：${doc.filename}。可以修改信息，也可以选择新文件替换。`;document.querySelector('#submit-button').textContent='保存修改';document.querySelector('#file').required=false;document.querySelector('#file-hint').textContent='不选文件则保留原文件';document.querySelector('#cancel-button').hidden=false;document.querySelector('#title').focus();}

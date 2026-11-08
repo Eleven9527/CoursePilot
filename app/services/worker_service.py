@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.enums import ParseStepKey, ParseStepStatus
 from app.services import document_service
 from app.services.chunking_service import create_chunks
+from app.services.embedding_service import embed_chunks
 from app.services.parsing_service import parse_with_mineru
 
 
@@ -43,6 +44,11 @@ def process_next_step(step_key: ParseStepKey) -> bool:
             _process_mineru_step(step)
         elif step["step_key"] == ParseStepKey.CHUNKING.value:
             _process_chunking_step(step)
+        elif step["step_key"] == ParseStepKey.EMBEDDING.value:
+            task_id, document_id = step["task_id"], step["document_id"]
+            chunks = document_service.get_embedding_chunks(task_id, document_id)
+            count = embed_chunks(chunks, document_id, task_id)
+            document_service.complete_embedding_step(task_id, document_id, count)
         else:
             raise ValueError(f"Worker 不支持此步骤：{step['step_key']}")
     except Exception as error:
@@ -66,7 +72,7 @@ def process_next_step(step_key: ParseStepKey) -> bool:
 
 
 def run_worker(stop_event: Event, step_key: ParseStepKey) -> None:
-    """持续轮询 SQLite 队列；收到停止信号后在当前步骤结束后退出。"""
+    """持续轮询数据库队列；收到停止信号后在当前步骤结束后退出。"""
     print(f"文档处理 Worker [{step_key.value}] 已启动", flush=True)
     while not stop_event.is_set():
         try:

@@ -188,6 +188,17 @@ def generate_document_chunks(document_id: str) -> JSONResponse:
                          "chunk_count": 0, "chunks": []}, status_code=status.HTTP_202_ACCEPTED)
 
 
+@router.post("/{document_id}/embedding/retry", status_code=202)
+def retry_document_embedding(document_id: str) -> dict[str, str]:
+    if document_service.get_document(document_id) is None:
+        raise HTTPException(404, "文档不存在")
+    if not settings.embedding_enabled:
+        raise HTTPException(409, "请先配置 Embedding 和 Milvus")
+    if not document_service.retry_embedding(document_id):
+        raise HTTPException(409, "当前任务没有失败的向量化步骤")
+    return {"status": ParseStepStatus.QUEUED.value}
+
+
 @router.get("/{document_id}/steps", response_model=list[ParseStepResponse])
 def get_parse_steps(document_id: str) -> list[dict]:
     if document_service.get_document(document_id) is None:
