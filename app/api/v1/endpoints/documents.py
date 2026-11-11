@@ -2,8 +2,11 @@ from pathlib import Path
 import re
 from uuid import uuid4
 from html import escape
+<<<<<<< HEAD
 import json
 import shutil
+=======
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -146,11 +149,19 @@ def get_document_chunks(document_id: str) -> JSONResponse:
     document = document_service.get_document(document_id)
     if document is None:
         raise HTTPException(404, "文档不存在")
+<<<<<<< HEAD
     chunks_path = document_service.get_chunks_path(document_id)
     if chunks_path.is_file():
         with chunks_path.open(encoding="utf-8") as chunks_file:
             chunks = [json.loads(line) for line in chunks_file if line.strip()]
         return JSONResponse({"document_id": document_id, "status": document["status"],
+=======
+    steps = document_service.get_document_steps(document_id)
+    chunk_step = next((step for step in steps if step["step_key"] == ParseStepKey.CHUNKING.value), None)
+    chunks = document_service.read_chunking_result(chunk_step)
+    if chunks is not None:
+        return JSONResponse({"document_id": document_id, "status": ParseStepStatus.SUCCEEDED.value,
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
                              "chunk_count": len(chunks), "chunks": chunks})
     return JSONResponse({
         "document_id": document_id,
@@ -167,6 +178,7 @@ def generate_document_chunks(document_id: str) -> JSONResponse:
     document = document_service.get_document(document_id)
     if document is None:
         raise HTTPException(404, "文档不存在")
+<<<<<<< HEAD
     mineru_result_path = Path(document["mineru_result_path"]) if document["mineru_result_path"] else None
     if mineru_result_path is None or not mineru_result_path.is_file():
         raise HTTPException(409, "Markdown 解析结果尚未生成，无法切分")
@@ -182,6 +194,58 @@ def generate_document_chunks(document_id: str) -> JSONResponse:
                          "chunk_count": 0, "chunks": []}, status_code=status.HTTP_202_ACCEPTED)
 
 
+=======
+    task_id = document["current_task_id"]
+    if not task_id:
+        raise HTTPException(409, "文档没有可关联的解析任务")
+
+    steps = document_service.get_document_steps(document_id)
+    chunk_step = next((step for step in steps if step["step_key"] == ParseStepKey.CHUNKING.value), None)
+    chunks = document_service.read_chunking_result(chunk_step)
+    if chunks is not None:
+        return JSONResponse({"document_id": document_id, "status": ParseStepStatus.SUCCEEDED.value,
+                             "chunk_count": len(chunks), "chunks": chunks})
+    parsed_path = Path(document["parsed_path"]) if document["parsed_path"] else None
+    if parsed_path is None or not parsed_path.is_file():
+        raise HTTPException(409, "Markdown 解析结果尚未生成，无法切分")
+    try:
+        queued_status = document_service.queue_chunking_step(task_id, document_id, parsed_path)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return JSONResponse({"document_id": document_id, "status": queued_status,
+                         "chunk_count": 0, "chunks": []}, status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/{document_id}/embedding/retry", status_code=202)
+def retry_document_embedding(document_id: str) -> dict[str, str]:
+    if document_service.get_document(document_id) is None:
+        raise HTTPException(404, "文档不存在")
+    if not settings.embedding_enabled:
+        raise HTTPException(409, "请先配置 Embedding 和 Milvus")
+    if not document_service.retry_embedding(document_id):
+        raise HTTPException(409, "当前任务没有失败的向量化步骤")
+    return {"status": ParseStepStatus.QUEUED.value}
+
+
+@router.get("/{document_id}/steps", response_model=list[ParseStepResponse])
+def get_parse_steps(document_id: str) -> list[dict]:
+    if document_service.get_document(document_id) is None:
+        raise HTTPException(404, "文档不存在")
+    result = []
+    for step in document_service.get_document_steps(document_id):
+        artifact_url = None
+        if step["step_key"] == ParseStepKey.SOURCE_SAVED.value:
+            artifact_url = f"{settings.api_prefix}/documents/{document_id}/source"
+        elif step["step_key"] == ParseStepKey.CHUNKING.value and step["status"] == ParseStepStatus.SUCCEEDED.value:
+            artifact_url = f"{settings.api_prefix}/documents/{document_id}/chunks"
+        elif step["output_path"] and Path(step["output_path"]).is_file():
+            artifact = "chunks" if step["step_key"] == "chunking" else "result"
+            artifact_url = f"{settings.api_prefix}/documents/{document_id}/{artifact}"
+        result.append({**step, "artifact_url": artifact_url})
+    return result
+
+
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def create_document(
     file: UploadFile = File(...),
@@ -249,7 +313,22 @@ def retry_processing(document_id: str) -> dict:
         if document_service.get_document(document_id) is None:
             raise HTTPException(404, "文档不存在")
         raise HTTPException(409, "文档正在处理中")
+<<<<<<< HEAD
     document = document_service.get_document(document_id)
     if document is None:
         raise HTTPException(404, "文档不存在")
     return document
+=======
+    task = document_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(500, "解析任务已创建，但无法读取任务记录")
+    return task
+
+
+@router.get("/tasks/{task_id}", response_model=ParseTaskResponse)
+def get_parse_task(task_id: str) -> dict:
+    task = document_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(404, "解析任务不存在")
+    return task
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d

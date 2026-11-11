@@ -7,27 +7,51 @@ from fastapi.responses import FileResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+<<<<<<< HEAD
 from app.services.document_service import initialize_database, recover_interrupted_processing
+=======
+from app.core.enums import ParseStepKey
+from app.rag.vector_store.milvus import list_collections
+from app.services.document_service import (
+    initialize_database, migrate_chunk_files, queue_existing_embeddings, recover_interrupted_steps,
+)
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
 from app.services.worker_service import run_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if settings.milvus_uri:
+        list_collections()
     initialize_database()
+<<<<<<< HEAD
     recover_interrupted_processing()
+=======
+    migrate_chunk_files()
+    recover_interrupted_steps()
+    step_keys = [ParseStepKey.MINERU_PARSE, ParseStepKey.CHUNKING]
+    if settings.embedding_enabled:
+        queue_existing_embeddings()
+        step_keys.append(ParseStepKey.EMBEDDING)
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
     stop_event = Event()
-    worker_thread = Thread(
-        target=run_worker,
-        args=(stop_event,),
-        name="document-worker",
-        daemon=True,
-    )
-    worker_thread.start()
+    workers = [
+        Thread(
+            target=run_worker,
+            args=(stop_event, step_key),
+            name=f"document-worker-{step_key.value}",
+            daemon=True,
+        )
+        for step_key in step_keys
+    ]
+    for worker in workers:
+        worker.start()
     try:
         yield
     finally:
         stop_event.set()
-        worker_thread.join(timeout=5)
+        for worker in workers:
+            worker.join(timeout=5)
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)

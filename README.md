@@ -44,29 +44,82 @@ cp .env.example .env
 
 ## 本地运行
 
-先激活项目虚拟环境并安装依赖：
+### Windows PowerShell
+
+1. 安装 Windows 版 [PostgreSQL](https://www.postgresql.org/download/windows/)，启动 PostgreSQL 服务。使用安装器提供的 SQL Shell（psql）连接管理员账号，执行下方的建库命令。
+2. 无 Docker 时，把 Milvus Standalone 部署到本机 WSL 2 的 Linux 环境，或使用已有的 Milvus 服务。选择有对应 Linux 安装包的发行版，并按 [Milvus Linux 安装包说明](https://milvus.io/docs/install_standalone-binary.md) 启动服务。WSL 2 尚未启用时，可在管理员 PowerShell 运行 `wsl --install -d Ubuntu`，按系统提示重启。
+3. 从 CoursePilot 根目录执行。已有虚拟环境时可跳过创建命令。
 
 ```powershell
-.\my_agent\Scripts\Activate.ps1
-pip install -r requirements.txt
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-MinerU 本地解析服务需先启动（当前配置使用本地 `basic` 档位；PDF 使用 `basic`，DOCX 使用 `flash`）：
+完成下方的数据库配置后启动：
 
 ```powershell
-.\my_agent\Scripts\mineru.exe server start
-.\my_agent\Scripts\mineru.exe server status
+.\.venv\Scripts\mineru.exe server start
+.\.venv\Scripts\python.exe main.py
 ```
 
-MinerU 程序依赖版本记录在 `requirements.txt`；模型文件与 MinerU 自身缓存位于用户目录 `C:\Users\ASUS\.mineru\`，不会放进 Git 仓库。当前已下载并验证 `basic` 模型。
+### macOS
 
-启动项目（API 启动时会自动启动 SQLite 轮询 Worker）：
+1. 使用 [macOS PostgreSQL 安装选项](https://www.postgresql.org/download/macos/) 中的 Homebrew 方式安装并启动 PostgreSQL。执行下方的建库命令。
+2. 无 Docker 时，在本机 Linux 虚拟机里部署 Milvus Standalone，或使用已有的 Milvus 服务。Linux 虚拟机的架构须和所选 Milvus 安装包匹配。从 macOS 使用虚拟机可达的 IP 或端口转发地址连接。参考 [Milvus Linux 安装包说明](https://milvus.io/docs/install_standalone-binary.md)。
 
-```powershell
+```bash
+brew install postgresql@17
+brew services start postgresql@17
+"$(brew --prefix postgresql@17)/bin/psql" -d postgres
+```
+
+退出 psql 后，从 CoursePilot 根目录执行：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+```
+
+完成下方的数据库配置后启动：
+
+```bash
+mineru server start
 python main.py
 ```
 
-上传接口只将步骤写入 SQLite 队列。后台 Worker 轮询并原子领取 `queued` 步骤；MinerU 成功后才将切分步骤排队。步骤失败会将依赖步骤标记为跳过。Worker 随 API 服务启动和关闭，无需单独打开终端。
+### 数据库配置
+
+在管理员 psql 会话中执行以下命令。`\password` 会交互式设置应用密码，`\q` 退出。
+
+```sql
+CREATE ROLE coursepilot LOGIN;
+\password coursepilot
+CREATE DATABASE coursepilot OWNER coursepilot;
+\q
+```
+
+在项目根目录的 `.env` 设置：
+
+```dotenv
+DATABASE_URL=postgresql://coursepilot:YOUR_PASSWORD@127.0.0.1:5432/coursepilot
+MILVUS_URI=http://127.0.0.1:19530
+MILVUS_TOKEN=
+```
+
+将密码占位符换成实际值。密码包含 URI 保留字符时需要 URL 编码。若启用 Milvus 认证，填写 `MILVUS_TOKEN`。从宿主机连接 WSL 或 Linux 虚拟机时，按实际网络地址修改 `MILVUS_URI`。可以用下面的命令验证 Milvus REST 接口，启用认证时添加 Bearer 请求头。
+
+```text
+curl -X POST http://127.0.0.1:19530/v2/vectordb/collections/list -H "Content-Type: application/json" -d "{}"
+```
+
+Windows PowerShell 中用 `curl.exe` 运行该命令。返回 `code: 0` 表示接口可用。应用配置了 Milvus 后也会在启动时执行同样的连接检查。
+
+PostgreSQL 的业务表由应用启动时创建。已有 SQLite 数据保留在 `data/documents.db`，配置 PostgreSQL 后应用会读取 PostgreSQL 中的记录。需要继续使用 SQLite 时将 `DATABASE_URL` 留空。上传文件和解析 Markdown 保存在 `DATA_DIR`，切分块写入当前数据库的 `document_chunks` 表。应用启动时会导入当前数据库所引用的旧切分 JSONL，并在入库后清理文件。
+
+Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集合维度由 Embedding 模型决定。配置 `EMBEDDING_BASE_URL`（通常以 `/v1` 结尾）、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION` 和 `MILVUS_URI` 后，API 启动时会同时启动向量化 Worker。服务要求鉴权时填写 `EMBEDDING_API_KEY`。向量化读取已入库的切分块，每批最多 16 块，使用稳定的块 ID 写入 Milvus。启动时也会为当前已切分、尚未向量化的文档补排任务。向量化失败后可在管理页单独重试。
 
 启动后可访问：
 
@@ -76,4 +129,8 @@ python main.py
 
 文档管理目前支持 PDF、Markdown 和 DOCX 文件的新增、信息编辑、文件替换与删除，并可选择适用年级（小学一年级至六年级、初一至初三、高一至高三）和单元（第 1 至第 20 单元，支持单个单元或连续范围，例如“第1-2单元”）。文档元数据和上传文件保存在项目根目录的 `data/` 下；该目录已加入 `.gitignore`。
 
+<<<<<<< HEAD
 每次上传或重试都会创建一条文档处理任务，并保留任务和步骤状态。处理任务依次包含“原始文件保存”“MinerU 结构解析”“文本切分”步骤；MinerU 解析仅指其中的 MinerU 步骤。文档列表展示当前处理阶段和对应失败状态。数据库使用 `processing_tasks` 保存任务，使用 `processing_steps` 保存每条任务的步骤。状态枚举分别定义在 `DocumentProcessingStatus`、`ProcessingTaskStatus`、`SourceSaveStepStatus`、`MinerUParseStepStatus` 和 `ChunkingStepStatus` 中。源文件、MinerU 日志、Markdown 解析结果及 JSONL 切分结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的文档处理任务；历史任务与步骤记录保留在 SQLite 中。
+=======
+每次上传或重试都会保留解析任务和步骤状态；流程依次执行 MinerU 结构解析和文本切分。文档列表分别显示原文件、MinerU 解析和文本切分的状态。源文件、MinerU 日志、Markdown 解析结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的解析任务；历史任务步骤记录保留在当前配置的数据库中。
+>>>>>>> 710f273831f6f7a5d4460e5895921a05add2da0d
