@@ -130,3 +130,39 @@ Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集�
 文档管理目前支持 PDF、Markdown 和 DOCX 文件的新增、信息编辑、文件替换与删除，并可选择适用年级（小学一年级至六年级、初一至初三、高一至高三）和单元（第 1 至第 20 单元，支持单个单元或连续范围，例如“第1-2单元”）。文档元数据和上传文件保存在项目根目录的 `data/` 下；该目录已加入 `.gitignore`。
 
 每次上传或重试都会保留解析任务和步骤状态；流程依次执行 MinerU 结构解析和文本切分。文档列表分别显示原文件、MinerU 解析和文本切分的状态。源文件、MinerU 日志、Markdown 解析结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的解析任务；历史任务步骤记录保留在当前配置的数据库中。
+
+## 检索评测
+
+从项目根目录运行。评测数据位于 `evals/units_1_2.json`。数据库里需要有该 DOCX 的当前切分结果，完整评测还需要使用当前 Embedding 配置完成向量入库，并启动 Milvus。
+
+装有 GNU Make 时，Windows 和 macOS 都可以从项目根目录运行：
+
+```sh
+make eval-validate
+make eval-retrieval
+make eval-retrieval TOP_K=10
+```
+
+Windows PowerShell 也可以直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.retrieval --validate-only
+.\.venv\Scripts\python.exe -m evals.retrieval --top-k 5
+```
+
+macOS
+
+```bash
+.venv/bin/python -m evals.retrieval --validate-only
+.venv/bin/python -m evals.retrieval --top-k 5
+```
+
+`--validate-only` 只从数据库核对依据文本。完整评测会调用 Embedding 和 Milvus，不需要启动 CoursePilot API。输出包含每题的命中块 ID 以及完整命中题数。Q08 要求两处依据都出现在结果中。Q09 和 Q10 留给后续的回答评测。
+
+切分调整后，脚本会用依据短语重新匹配当前块。原文或文件名发生变化时，更新对应的评测数据后先运行一次校验。对比不同检索方案时，使用同一版资料和评测题。
+
+## 课程问答
+
+启动 CoursePilot 后，打开 `http://127.0.0.1:8000/qa`。先在 `/admin` 上传并完成向量化，资料须标注年级和单元。问答页从已向量化的当前资料生成选项。起止单元相同表示选择单个单元，范围和资料标签有交集即可纳入检索。
+
+问答使用已有 Embedding 和 Milvus 配置。另在 `.env` 设置 `CHAT_BASE_URL`（通常以 `/v1` 结尾）、`CHAT_MODEL` 和服务所需的 `OPENAI_API_KEY`。对话模型需要支持 JSON 对象响应。只调试检索时，可调用 `POST /api/v1/qa/search`，传入 `question`、`grade`、`unit_start`、`unit_end` 和可选的 `top_k`。

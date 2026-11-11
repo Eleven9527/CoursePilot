@@ -1,7 +1,8 @@
 """Milvus REST client for embeddings produced by the ingestion pipeline."""
 
 import json
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 from app.core.config import settings
 
@@ -19,7 +20,10 @@ def _request(action: str, payload: dict) -> dict | list:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        open_request = urlopen
+        if urlsplit(request.full_url).hostname in {"localhost", "127.0.0.1", "::1"}:
+            open_request = build_opener(ProxyHandler({})).open
+        with open_request(request, timeout=10) as response:
             result = json.load(response)
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"Milvus 请求失败 ({action}): {exc}") from exc
@@ -58,10 +62,13 @@ def upsert_vectors(collection: str, rows: list[dict]) -> None:
         _request("entities/upsert", {"collectionName": collection, "data": rows})
 
 
-def search_vectors(collection: str, vector: list[float], limit: int = 10) -> list[dict]:
-    return _request("entities/search", {
+def search_vectors(collection: str, vector: list[float], limit: int = 10, *, filter_expression: str = "") -> list[dict]:
+    payload = {
         "collectionName": collection,
         "data": [vector],
         "annsField": "vector",
         "limit": limit,
-    })
+    }
+    if filter_expression:
+        payload["filter"] = filter_expression
+    return _request("entities/search", payload)

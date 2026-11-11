@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.rag.vector_store import milvus
 
 
-def _embed(texts: list[str]) -> list[list[float]]:
+def embed_texts(texts: list[str]) -> list[list[float]]:
     headers = {"Content-Type": "application/json"}
     if settings.embedding_api_key:
         headers["Authorization"] = f"Bearer {settings.embedding_api_key}"
@@ -39,16 +39,20 @@ def _embed(texts: list[str]) -> list[list[float]]:
     return [vectors[index] for index in range(len(texts))]
 
 
+def embedding_collection() -> str:
+    model_key = f"{settings.embedding_base_url.rstrip('/')}:{settings.embedding_model}:{settings.embedding_dimension}"
+    return f"coursepilot_chunks_{hashlib.sha256(model_key.encode()).hexdigest()[:16]}"
+
+
 def embed_chunks(chunks: list[dict], document_id: str, task_id: str) -> int:
     if not chunks:
         return 0
-    model_key = f"{settings.embedding_base_url.rstrip('/')}:{settings.embedding_model}:{settings.embedding_dimension}"
-    collection = f"coursepilot_chunks_{hashlib.sha256(model_key.encode()).hexdigest()[:16]}"
+    collection = embedding_collection()
     if collection not in milvus.list_collections():
         milvus.create_collection(collection, settings.embedding_dimension)
     for offset in range(0, len(chunks), 16):
         batch = chunks[offset:offset + 16]
-        vectors = _embed([chunk["text"] for chunk in batch])
+        vectors = embed_texts([chunk["text"] for chunk in batch])
         milvus.upsert_vectors(collection, [
             {"id": chunk["chunk_id"], "vector": vector, "document_id": document_id, "task_id": task_id}
             for chunk, vector in zip(batch, vectors, strict=True)

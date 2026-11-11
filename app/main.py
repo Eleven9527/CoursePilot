@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+import logging
+from html import escape
 from pathlib import Path
 from threading import Event, Thread
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -17,13 +19,18 @@ from app.services.worker_service import run_worker
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    embedding_ready = settings.embedding_enabled
     if settings.milvus_uri:
-        list_collections()
+        try:
+            list_collections()
+        except RuntimeError as exc:
+            embedding_ready = False
+            logging.getLogger(__name__).warning("Milvus 连接失败，本次启动暂停向量化 Worker：%s", exc)
     initialize_database()
     migrate_chunk_files()
     recover_interrupted_steps()
     step_keys = [ParseStepKey.MINERU_PARSE, ParseStepKey.CHUNKING]
-    if settings.embedding_enabled:
+    if embedding_ready:
         queue_existing_embeddings()
         step_keys.append(ParseStepKey.EMBEDDING)
     stop_event = Event()
@@ -58,3 +65,9 @@ def read_root() -> dict[str, str]:
 @app.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "admin.html")
+
+
+@app.get("/qa", include_in_schema=False)
+def qa_page() -> HTMLResponse:
+    page = (Path(__file__).parent / "static" / "qa.html").read_text(encoding="utf-8")
+    return HTMLResponse(page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True)))

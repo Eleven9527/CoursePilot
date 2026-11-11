@@ -1,0 +1,15 @@
+{
+  "source_filename": "期中复习之单元语法综合练60题（Units 1-2）（解析版）.docx",
+  "cases": [
+    {"id":"Q01","question":"清洁工作做完、问吴老师能不能回家的那道题，空格填什么？","answer":"第 3 题，B have finished。","evidence":[["the cleaning work","have finished"]]},
+    {"id":"Q02","question":"《哪吒之魔童降世》那题说电影已经看过两遍，选哪个？","answer":"第 5 题，D have watched。","evidence":[["Birth of the Demon Child","have watched"]]},
+    {"id":"Q03","question":"我借了朋友的相机两个月，为什么用 have kept？","answer":"for 2 months 表示持续时间，keep 能表达持续持有。","evidence":[["camera","for 2 months","have kept"]]},
+    {"id":"Q04","question":"张燕去了上海，下周一才回来。为什么选 has gone to？","answer":"她去了上海还没回来。has been to 表示去过并已回来。","evidence":[["won’t be back until next Monday","has gone to"]]},
+    {"id":"Q05","question":"洪泽湖那题问你去过吗，完整句子怎么写？","answer":"Have you ever been to Hongze Lake?","evidence":[["Hongze Lake","Have; been to"]]},
+    {"id":"Q06","question":"Erick 到目前为止学了很多中国文化和历史，原题用哪个动词形式？","answer":"第 53 题，D has learnt，提示是 So far。","evidence":[["So far, Erick","has learnt"]]},
+    {"id":"Q07","question":"自行车那题为什么用 since three years ago？for 后面又该接什么？","answer":"three years ago 是过去的时间点。for 后面接时长，例如 three years。","evidence":[["that bike over there","For后跟一段时间"]]},
+    {"id":"Q08","question":"资料里《西游记》和《金银岛》的题都提到读了两遍。两道题分别怎么填？","answer":"第 24 题 have read，第 41 题 has read，两处都要引用。","evidence":[["Journey to the West","have read"],["Treasure Island","has read"]]},
+    {"id":"Q09","question":"这份练习有听力录音稿吗？帮我抄出第一段。","answer":"已入库资料中找不到听力录音稿。","evidence":[]},
+    {"id":"Q10","question":"这份资料里，Unit 3 的第 1 题答案是什么？","answer":"现有资料覆盖 Units 1–2，无法据此确定 Unit 3 的答案。","evidence":[]}
+  ]
+}
