@@ -7,14 +7,14 @@ from fastapi.responses import FileResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.services.document_service import initialize_database, recover_interrupted_steps
+from app.services.document_service import initialize_database, recover_interrupted_processing
 from app.services.worker_service import run_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
-    recover_interrupted_steps()
+    recover_interrupted_processing()
     stop_event = Event()
     worker_thread = Thread(
         target=run_worker,

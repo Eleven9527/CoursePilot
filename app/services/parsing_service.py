@@ -1,15 +1,12 @@
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from app.core.config import settings
-from app.core.enums import ParseStepKey, ParseStepStatus
-from app.services import document_service
 
 
-def parse_with_mineru(source: Path, task_id: str) -> Path:
+def parse_with_mineru(source: Path, document_id: str) -> Path:
     """调用本地 MinerU，将输入文档解析为 Markdown。"""
     executable = None
     if settings.mineru_executable:
@@ -25,7 +22,7 @@ def parse_with_mineru(source: Path, task_id: str) -> Path:
     if executable is None:
         raise RuntimeError("未检测到 MinerU 命令。请安装 MinerU，或在 .env 中配置有效的 MINERU_EXECUTABLE。")
 
-    output_dir = settings.parsed_dir / task_id
+    output_dir = settings.parsed_dir / document_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{source.stem}.md"
     stdout_file = output_dir / "mineru.stdout.log"
@@ -38,16 +35,6 @@ def parse_with_mineru(source: Path, task_id: str) -> Path:
     if source.suffix.lower() == ".pdf":
         command.extend(["--pages", "all"])
 
-    document_service.set_step_status(
-        task_id,
-        ParseStepKey.MINERU_PARSE.value,
-        ParseStepStatus.PROCESSING,
-        input_path=source,
-        details=json.dumps(
-            {"command": command, "stdout_log": str(stdout_file), "stderr_log": str(stderr_file)},
-            ensure_ascii=False,
-        ),
-    )
     result = subprocess.run(
         command,
         capture_output=True,
