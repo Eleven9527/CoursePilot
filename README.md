@@ -166,3 +166,11 @@ macOS
 启动 CoursePilot 后，打开 `http://127.0.0.1:8000/qa`。先在 `/admin` 上传并完成向量化，资料须标注年级和单元。问答页从已向量化的当前资料生成选项。起止单元相同表示选择单个单元，范围和资料标签有交集即可纳入检索。
 
 问答使用已有 Embedding 和 Milvus 配置。另在 `.env` 设置 `CHAT_BASE_URL`（通常以 `/v1` 结尾）、`CHAT_MODEL` 和服务所需的 `OPENAI_API_KEY`。对话模型需要支持 JSON 对象响应。只调试检索时，可调用 `POST /api/v1/qa/search`，传入 `question`、`grade`、`unit_start`、`unit_end` 和可选的 `top_k`。
+
+### 问答接口验收
+
+启动 CoursePilot 后，从 `evals/units_1_2.json` 取题目。此次资料使用高一、第 1–2 单元。请求体设置 `question`、`grade`、`unit_start`、`unit_end` 和 `top_k`（建议 5），可在 `http://127.0.0.1:8000/docs` 发起请求。
+
+- 对 Q01–Q08 调用 `POST /api/v1/qa/search`，检查返回的文本块是否包含各题的全部预期依据。Q08 需要两处依据同时命中。
+- 对 Q01–Q10 调用 `POST /api/v1/qa/ask`，对照预期答案，核对引用是否支持回答。Q09 和 Q10 检查依据不足时的表现。
+- `make eval-retrieval` 跑纯向量检索基线。问答接口还包含范围过滤、查询改写、关键词召回和结果融合，验收时单独记录它的结果。
