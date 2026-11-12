@@ -1,6 +1,7 @@
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 from math import log
 import re
 import unicodedata
@@ -11,6 +12,8 @@ from app.rag.vector_store import milvus
 from app.services.embedding_service import embed_texts, embedding_collection
 
 _UNIT = re.compile(r"第(\d+)(?:-(\d+))?单元")
+_QUESTION_NUMBER = re.compile(r"第\s*([1-9]\d*|[一二三四五六七八九十])\s*题")
+_CHINESE_NUMBERS = dict(zip("一二三四五六七八九十", range(1, 11)))
 
 
 def unit_range(label: str) -> tuple[int, int] | None:
@@ -43,6 +46,8 @@ def available_scopes() -> dict[str, list[int]]:
 
 def _tokens(text: str) -> Counter:
     normalized = unicodedata.normalize("NFKC", text).casefold()
+    digits = dict(zip("一二三四五六七八九", "123456789"))
+    normalized = re.sub(r"第([一二三四五六七八九])题", lambda match: f"第{digits[match[1]]}题", normalized)
     tokens = Counter(re.findall(r"[a-z]+|\d+", normalized))
     for phrase in re.findall(r"[\u3400-\u9fff]+", normalized):
         tokens.update(phrase[index:index + 2] for index in range(len(phrase) - 1))
@@ -103,12 +108,29 @@ def retrieve(question: str, grade: str, start: int, end: int, top_k: int, rewrit
     with ThreadPoolExecutor(max_workers=2) as executor:
         semantic = executor.submit(semantic_rank)
         keywords = executor.submit(_keyword_rank, chunks, queries, limit)
-        rankings = [*semantic.result(), keywords.result()]
+        keyword_results = keywords.result()
+        try:
+            rankings = [*semantic.result(), keyword_results]
+        except RuntimeError as exc:
+            if not keyword_results:
+                raise
+            logging.getLogger(__name__).warning("语义检索暂不可用，使用关键词结果：%s", exc)
+            rankings = [keyword_results]
     scores: dict[str, float] = {}
     for ranking in rankings:
         for rank, chunk_id in enumerate(dict.fromkeys(ranking), 1):
             scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (60 + rank)
+    numbered = set()
+    match = _QUESTION_NUMBER.search(unicodedata.normalize("NFKC", question))
+    if match:
+        number = _CHINESE_NUMBERS.get(match[1], match[1])
+        heading = re.compile(rf"(?m)^\s*{number}[.、)]\s*\S")
+        numbered = {
+            chunk_id for chunk_id, chunk in chunks.items()
+            if heading.search(unicodedata.normalize("NFKC", chunk["text"]))
+        }
     return [
-        {**chunks[chunk_id], "score": scores[chunk_id]}
-        for chunk_id in sorted(scores, key=lambda key: (-scores[key], key))[:top_k]
+        {**chunks[chunk_id], "score": scores.get(chunk_id, 0.0)}
+        for chunk_id in sorted(scores.keys() | numbered,
+                               key=lambda key: (key not in numbered, -scores.get(key, 0), key))[:top_k]
     ]
