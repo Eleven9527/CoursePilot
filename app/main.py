@@ -67,6 +67,11 @@ def admin_page() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "admin.html")
 
 
+@app.get("/assets/sidebar.css", include_in_schema=False)
+def sidebar_styles() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "sidebar.css", media_type="text/css")
+
+
 @app.get("/assets/vue.global.prod.js", include_in_schema=False)
 def vue_runtime() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "vendor" / "vue.global.prod.js",

@@ -6,19 +6,35 @@
   <title>课程问答 · CoursePilot</title>
   <style>
     :root{font:16px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;color:#172b2b;background:#f2f6f3}
-    [v-cloak]{display:none} *{box-sizing:border-box} body{margin:0} main{max-width:780px;margin:0 auto;padding:56px 20px}
+    [v-cloak]{display:none} *{box-sizing:border-box} body{margin:0}
+    .layout{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}
+    main{width:100%;max-width:780px;margin:0 auto;padding:36px 20px}
+    @media(max-width:950px){.layout{grid-template-columns:190px minmax(0,1fr)}}
+    @media(max-width:680px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}main{padding:23px 14px}}
     header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #cbd9d1;padding-bottom:16px;margin-bottom:28px}
     h1{font-size:32px;margin:0} a{color:#246b55} form,section{background:white;border:1px solid #d7e4db;border-radius:14px;padding:24px;margin:0 0 20px}
     .scope{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:18px}.scope label{flex:1;min-width:125px}
     label{display:block;font-weight:600} select,textarea,button{font:inherit} select,textarea{display:block;width:100%;margin-top:5px;padding:8px 10px;border:1px solid #aebfb6;border-radius:8px;background:white;color:inherit}
     textarea{min-height:110px;resize:vertical} button{margin-top:16px;padding:9px 20px;background:#17634b;color:white;border:0;border-radius:8px;cursor:pointer} button:disabled{opacity:.55;cursor:default}
-    #status{margin:0 0 14px;color:#405850} #answer,blockquote{white-space:pre-wrap;overflow-wrap:anywhere} h2{margin-top:0;font-size:21px}
+    #status{margin:0 0 14px;color:#405850} #answer p,blockquote{white-space:pre-wrap;overflow-wrap:anywhere} h2{margin-top:0;font-size:21px}
+    #answer p{margin:0;line-height:1.8} #answer p+p{margin-top:14px}
+    .answer-sources{margin-top:20px}.answer-sources h3{font-size:14px;color:#405850;margin:0 0 6px}
     details{border-top:1px solid #d7e4db;padding:12px 0} summary{cursor:pointer} blockquote{margin:10px 0 0;padding-left:12px;border-left:3px solid #a6c8b7}
   </style>
+  <link rel="stylesheet" href="/assets/sidebar.css">
 </head>
 <body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">My Agent<small>课程资料助教</small></div>
+    <nav aria-label="工作台">
+      <div class="nav-label">工作台</div>
+      <a class="nav-link" href="/admin"><span aria-hidden="true">▤</span>文档管理</a>
+      <a class="nav-link" href="/qa" aria-current="page"><span class="nav-chat" aria-hidden="true"></span>课程问答</a>
+    </nav>
+  </aside>
 <main id="qa-app" v-cloak data-api-prefix="__QA_API_PREFIX__">
-  <header><h1>课程问答</h1><a href="/admin">资料管理</a></header>
+  <header><h1>课程问答</h1></header>
   <form @submit.prevent="ask">
     <div class="scope">
       <label>年级<select v-model="grade" required>
@@ -37,13 +53,19 @@
   <p v-if="status" id="status" role="status">{{ status }}</p>
   <section v-if="result">
     <h2>回答</h2>
-    <p id="answer">{{ result.answer }}</p>
-    <details v-for="source in result.sources" :key="source.chunk_id">
-      <summary>[{{ source.number }}] {{ source.title }} · {{ source.heading || source.unit }}</summary>
-      <blockquote>{{ source.text }}</blockquote>
-    </details>
+    <div id="answer">
+      <p v-for="(paragraph, index) in answerParagraphs" :key="index">{{ paragraph }}</p>
+    </div>
+    <div v-if="result.sources.length" class="answer-sources">
+      <h3>引用资料</h3>
+      <details v-for="source in result.sources" :key="source.chunk_id">
+        <summary>[{{ source.number }}] {{ source.title }} · {{ source.heading || source.unit }}</summary>
+        <blockquote>{{ source.text }}</blockquote>
+      </details>
+    </div>
   </section>
 </main>
+</div>
 <script src="/assets/vue.global.prod.js"></script>
 <script>
   const root = document.querySelector('#qa-app');
@@ -55,6 +77,10 @@
               busy: false, status: '正在读取可用资料…', result: null};
     },
     computed: {
+      answerParagraphs() {
+        return (this.result?.answer || '').split(/\r?\n[ \t]*\r?\n|(?<=[。！？])[ \t]*(?=第\s*[一二三四五六七八九十百\d]+\s*题)/u)
+          .map(paragraph => paragraph.trim()).filter(Boolean);
+      },
       units() { return this.scopes[this.grade] || []; },
       endUnits() { return this.units.filter(unit => unit >= this.start); },
     },

@@ -1,0 +1,22 @@
+.layout > .sidebar {
+  background: #172a25;
+  color: #ecf3ee;
+  padding: 28px 18px;
+  display: block;
+  font: 400 14px/20px Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.sidebar .brand {font-size:18px;line-height:24px;font-weight:700;letter-spacing:.2px;padding:5px 10px 30px}
+.sidebar .brand small {display:block;color:#9cafa7;font-size:12px;line-height:18px;font-weight:500;margin-top:6px}
+.sidebar .nav-label {padding:10px;color:#91a69d;font-size:11px;line-height:16px;letter-spacing:1.2px}
+.sidebar .nav-link {display:flex;align-items:center;gap:9px;margin-top:6px;padding:12px 14px;border-radius:9px;background:transparent;color:#f5fbf7;font-size:14px;line-height:20px;text-decoration:none}
+.sidebar .nav-link[aria-current="page"],.sidebar .nav-link:hover,.sidebar .nav-link:focus-visible {background:#294139}
+.sidebar .nav-link > span {width:14px;flex:none;text-align:center}
+.sidebar .nav-chat {position:relative;height:11px;border:1px solid currentColor;border-radius:3px}
+.sidebar .nav-chat::after {content:"";position:absolute;left:2px;bottom:-3px;width:4px;height:4px;border-left:1px solid currentColor;transform:skewY(-35deg);background:#172a25}
+@media(max-width:680px) {
+  .layout > .sidebar {padding:14px 18px}
+  .sidebar .brand {padding:0}
+  .sidebar .brand small,.sidebar .nav-label {display:none}
+  .sidebar nav {display:flex;gap:8px}
+  .sidebar .nav-link {padding:9px 12px}
+}
