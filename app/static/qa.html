@@ -6,7 +6,7 @@
   <title>课程问答 · CoursePilot</title>
   <style>
     :root{font:16px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;color:#172b2b;background:#f2f6f3}
-    *{box-sizing:border-box} body{margin:0} main{max-width:780px;margin:0 auto;padding:56px 20px}
+    [v-cloak]{display:none} *{box-sizing:border-box} body{margin:0} main{max-width:780px;margin:0 auto;padding:56px 20px}
     header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #cbd9d1;padding-bottom:16px;margin-bottom:28px}
     h1{font-size:32px;margin:0} a{color:#246b55} form,section{background:white;border:1px solid #d7e4db;border-radius:14px;padding:24px;margin:0 0 20px}
     .scope{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:18px}.scope label{flex:1;min-width:125px}
@@ -17,94 +17,88 @@
   </style>
 </head>
 <body>
-<main data-api-prefix="__QA_API_PREFIX__">
+<main id="qa-app" v-cloak data-api-prefix="__QA_API_PREFIX__">
   <header><h1>课程问答</h1><a href="/admin">资料管理</a></header>
-  <form id="question-form">
+  <form @submit.prevent="ask">
     <div class="scope">
-      <label>年级<select id="grade" required></select></label>
-      <label>起始单元<select id="start" required></select></label>
-      <label>结束单元<select id="end" required></select></label>
+      <label>年级<select v-model="grade" required>
+        <option v-for="item in Object.keys(scopes)" :key="item" :value="item">{{ item }}</option>
+      </select></label>
+      <label>起始单元<select v-model.number="start" required>
+        <option v-for="unit in units" :key="unit" :value="unit">第 {{ unit }} 单元</option>
+      </select></label>
+      <label>结束单元<select v-model.number="end" required>
+        <option v-for="unit in endUnits" :key="unit" :value="unit">第 {{ unit }} 单元</option>
+      </select></label>
     </div>
-    <label>问题<textarea id="question" required maxlength="1000" placeholder="例如：借相机两个月的题为什么用 have kept？"></textarea></label>
-    <button id="submit" disabled>提问</button>
+    <label>问题<textarea v-model.trim="question" required maxlength="1000" placeholder="例如：借相机两个月的题为什么用 have kept？"></textarea></label>
+    <button :disabled="busy || !grade || !question">提问</button>
   </form>
-  <p id="status" role="status">正在读取可用资料…</p>
-  <section id="result" hidden>
+  <p v-if="status" id="status" role="status">{{ status }}</p>
+  <section v-if="result">
     <h2>回答</h2>
-    <p id="answer"></p>
-    <div id="sources"></div>
+    <p id="answer">{{ result.answer }}</p>
+    <details v-for="source in result.sources" :key="source.chunk_id">
+      <summary>[{{ source.number }}] {{ source.title }} · {{ source.heading || source.unit }}</summary>
+      <blockquote>{{ source.text }}</blockquote>
+    </details>
   </section>
 </main>
+<script src="/assets/vue.global.prod.js"></script>
 <script>
-  const grade = document.querySelector('#grade');
-  const start = document.querySelector('#start');
-  const end = document.querySelector('#end');
-  const submit = document.querySelector('#submit');
-  const status = document.querySelector('#status');
-  const result = document.querySelector('#result');
-  const api = document.querySelector('main').dataset.apiPrefix + '/qa';
-  let scopes = {};
-  function options(select, values, format = value => value) {
-    select.replaceChildren(...values.map(value => new Option(format(value), value)));
-  }
-  function setEnd() {
-    const selected = end.value;
-    const units = (scopes[grade.value] || []).filter(unit => unit >= Number(start.value));
-    options(end, units, unit => `第 ${unit} 单元`);
-    if (units.includes(Number(selected))) end.value = selected;
-  }
-  function setUnits() {
-    options(start, scopes[grade.value] || [], unit => `第 ${unit} 单元`);
-    end.value = '';
-    setEnd();
-  }
-  grade.addEventListener('change', setUnits);
-  start.addEventListener('change', setEnd);
-  async function request(path, options) {
-    const response = await fetch(path, options);
-    const data = await response.json();
-    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败');
-    return data;
-  }
-  request(api + '/scopes').then(data => {
-    scopes = data;
-    options(grade, Object.keys(scopes));
-    setUnits();
-    submit.disabled = !grade.value;
-    status.textContent = grade.value ? '' : '暂无已完成向量化且标注年级和单元的资料。';
-  }).catch(error => { status.textContent = error.message; });
-  document.querySelector('#question-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    const question = document.querySelector('#question').value.trim();
-    if (!question) return;
-    submit.disabled = true;
-    result.hidden = true;
-    status.textContent = '正在检索资料并生成回答…';
-    try {
-      const data = await request(api + '/ask', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({question, grade: grade.value, unit_start: Number(start.value), unit_end: Number(end.value)})
-      });
-      document.querySelector('#answer').textContent = data.answer;
-      const sources = document.querySelector('#sources');
-      sources.replaceChildren(...data.sources.map(source => {
-        const details = document.createElement('details');
-        const title = document.createElement('summary');
-        title.textContent = `[${source.number}] ${source.title} · ${source.heading || source.unit}`;
-        const quote = document.createElement('blockquote');
-        quote.textContent = source.text;
-        details.append(title, quote);
-        return details;
-      }));
-      result.hidden = false;
-      status.textContent = '';
-    } catch (error) {
-      status.textContent = error.message;
-    } finally {
-      submit.disabled = false;
-    }
-  });
+  const root = document.querySelector('#qa-app');
+  const api = root.dataset.apiPrefix + '/qa';
+
+  Vue.createApp({
+    data() {
+      return {scopes: {}, grade: '', start: null, end: null, question: '',
+              busy: false, status: '正在读取可用资料…', result: null};
+    },
+    computed: {
+      units() { return this.scopes[this.grade] || []; },
+      endUnits() { return this.units.filter(unit => unit >= this.start); },
+    },
+    watch: {
+      grade() { this.start = this.units[0] ?? null; this.end = this.start; },
+      start() { if (!this.endUnits.includes(this.end)) this.end = this.start; },
+    },
+    async mounted() {
+      try {
+        this.scopes = await this.request('/scopes');
+        this.grade = Object.keys(this.scopes)[0] || '';
+        this.status = this.grade ? '' : '暂无已完成向量化且标注年级和单元的资料。';
+      } catch (error) {
+        this.status = error.message;
+      }
+    },
+    methods: {
+      async request(path, options) {
+        const response = await fetch(api + path, options);
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败');
+        return data;
+      },
+      async ask() {
+        if (this.busy || !this.question || !this.grade) return;
+        this.busy = true;
+        this.result = null;
+        this.status = '正在检索资料并生成回答…';
+        try {
+          this.result = await this.request('/ask', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: this.question, grade: this.grade,
+                                  unit_start: this.start, unit_end: this.end}),
+          });
+          this.status = '';
+        } catch (error) {
+          this.status = error.message;
+        } finally {
+          this.busy = false;
+        }
+      },
+    },
+  }).mount(root);
 </script>
 </body>
 </html>

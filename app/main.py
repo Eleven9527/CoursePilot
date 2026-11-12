@@ -67,6 +67,12 @@ def admin_page() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "admin.html")
 
 
+@app.get("/assets/vue.global.prod.js", include_in_schema=False)
+def vue_runtime() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "vendor" / "vue.global.prod.js",
+                        media_type="text/javascript")
+
+
 @app.get("/qa", include_in_schema=False)
 def qa_page() -> HTMLResponse:
     page = (Path(__file__).parent / "static" / "qa.html").read_text(encoding="utf-8")
