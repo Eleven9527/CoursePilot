@@ -2,7 +2,8 @@
   background: #172a25;
   color: #ecf3ee;
   padding: 28px 18px;
-  display: block;
+  display: flex;
+  flex-direction: column;
   font: 400 14px/20px Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 .sidebar .brand {font-size:18px;line-height:24px;font-weight:700;letter-spacing:.2px;padding:5px 10px 30px}
@@ -19,4 +20,23 @@
   .sidebar .brand small,.sidebar .nav-label {display:none}
   .sidebar nav {display:flex;gap:8px}
   .sidebar .nav-link {padding:9px 12px}
+}
+
+.sidebar .sidebar-logout {
+  margin: auto 0 0;
+  padding: 12px 0 0;
+  border: 0;
+  border-top: 1px solid #ffffff20;
+  border-radius: 0;
+  background: transparent;
+}
+.sidebar .sidebar-logout button {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+@media(max-width:680px) {
+  .sidebar .sidebar-logout {margin-top:8px;padding-top:6px}
 }

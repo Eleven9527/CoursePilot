@@ -3,9 +3,11 @@
 import argparse
 import json
 import re
+from http.cookiejar import CookieJar
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 from evals.retrieval import normalize
 
@@ -19,7 +21,18 @@ def main() -> int:
 
     fixture = json.loads(Path(__file__).with_name("units_1_2.json").read_text(encoding="utf-8"))
     scope = {"grade": "高一", "unit_start": 1, "unit_end": 2, "top_k": args.top_k}
-    opener = build_opener(ProxyHandler({}))
+    cookies = CookieJar()
+    opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(cookies))
+    service = urlsplit(args.api_url)
+    login_url = urlunsplit((service.scheme, service.netloc, "/login", "", ""))
+    try:
+        with opener.open(login_url, data=urlencode({"account": "student", "password": "123"}).encode(),
+                         timeout=10):
+            pass
+    except OSError as exc:
+        parser.exit(2, f"Demo login failed: {exc}\n")
+    if not any(cookie.name == "session" for cookie in cookies):
+        parser.exit(2, "Demo login did not return a session cookie.\n")
     results = []
     for case in fixture["cases"]:
         row = {"id": case["id"], "question": case["question"], "expected_answer": case["answer"]}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · CoursePilot</title>
+  <style>
+    * {box-sizing:border-box}
+    body {margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+          font:16px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; color:#172a25; background:#f2f6f3}
+    main {width:min(100%,420px); padding:32px; background:white; border:1px solid #d7e4db; border-radius:14px}
+    h1 {margin:0 0 20px; font-size:26px}
+    label {display:block; margin-top:12px; font-weight:600}
+    select,input,button {display:block; width:100%; font:inherit; padding:9px 12px; margin-top:5px;
+                         border:1px solid #aebfb6; border-radius:8px}
+    button {margin-top:20px; border:0; background:#17634b; color:white; cursor:pointer}
+    #error {color:#a1342b}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>登录 CoursePilot</h1>
+    <form action="/login" method="post">
+      <label>账号<select name="account">
+        <option value="teacher">教师</option>
+        <option value="student">学生</option>
+      </select></label>
+      <label>密码<input type="password" name="password" required autocomplete="current-password" placeholder="演示密码 123"></label>
+      <p id="error" role="alert" hidden>账号或密码错误，请重试。</p>
+      <button>登录</button>
+    </form>
+  </main>
+  <script>
+    document.querySelector('#error').hidden = !new URLSearchParams(location.search).has('error');
+  </script>
+</body>
+</html>

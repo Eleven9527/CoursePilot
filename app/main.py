@@ -2,13 +2,16 @@ from contextlib import asynccontextmanager
 import logging
 from html import escape
 from pathlib import Path
+from secrets import token_hex
 from threading import Event, Thread
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.auth import authenticate, current_role
 from app.core.enums import ParseStepKey
 from app.rag.vector_store.milvus import list_collections
 from app.services.document_service import (
@@ -54,6 +57,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=token_hex(32), max_age=8 * 3600)
 app.include_router(api_router, prefix=settings.api_prefix)
 
 
@@ -63,8 +67,31 @@ def read_root() -> dict[str, str]:
 
 
 @app.get("/admin", include_in_schema=False)
-def admin_page() -> FileResponse:
+def admin_page(request: Request):
+    role = current_role(request)
+    if role != "teacher":
+        return RedirectResponse("/qa" if role else "/login", status_code=303)
     return FileResponse(Path(__file__).parent / "static" / "admin.html")
+
+
+@app.get("/login", include_in_schema=False)
+def login_page():
+    return FileResponse(Path(__file__).parent / "static" / "login.html")
+
+
+@app.post("/login", include_in_schema=False)
+def login(request: Request, account: str = Form(...), password: str = Form(...)):
+    if not authenticate(account, password):
+        return RedirectResponse("/login?error=1", status_code=303)
+    request.session.clear()
+    request.session["account"] = account
+    return RedirectResponse("/admin" if account == "teacher" else "/qa", status_code=303)
+
+
+@app.post("/logout", include_in_schema=False)
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.get("/assets/sidebar.css", include_in_schema=False)
@@ -79,6 +106,10 @@ def vue_runtime() -> FileResponse:
 
 
 @app.get("/qa", include_in_schema=False)
-def qa_page() -> HTMLResponse:
+def qa_page(request: Request):
+    if current_role(request) is None:
+        return RedirectResponse("/login", status_code=303)
     page = (Path(__file__).parent / "static" / "qa.html").read_text(encoding="utf-8")
+    if current_role(request) == "student":
+        page = page.replace('<a class="nav-link" href="/admin"><span aria-hidden="true">▤</span>文档管理</a>', "")
     return HTMLResponse(page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True)))

@@ -32,7 +32,7 @@
     .review-close:hover{background:#dfe8e1;color:#172a25}
     @media(max-width:760px){.review-grid{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}.review-column{height:auto}}
   </style>
-  <link rel="stylesheet" href="/assets/sidebar.css">
+  <link rel="stylesheet" href="/assets/sidebar.css?v=2">
 </head>
 <body>
   <div class="layout">
@@ -42,8 +42,12 @@
         <div class="nav-label">工作台</div>
         <a class="nav-item nav-link" href="/admin" aria-current="page"><span aria-hidden="true">▤</span>文档管理</a>
         <a class="nav-item nav-link" href="/qa"><span class="nav-chat" aria-hidden="true"></span>课程问答</a>
-      </nav>
-    </aside>
+
+    </nav>
+      <form class="sidebar-logout" action="/logout" method="post">
+    <button class="nav-link" type="submit">退出登录</button>
+  </form>
+</aside>
     <main class="main">
       <header class="topline"><div><div class="eyebrow">CONTENT LIBRARY</div><h1>课程文档</h1></div><div class="pill">管理端 · 本地资料库</div></header>
       <section class="content" id="admin-app" v-cloak>
