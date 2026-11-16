@@ -112,4 +112,14 @@ def qa_page(request: Request):
     page = (Path(__file__).parent / "static" / "qa.html").read_text(encoding="utf-8")
     if current_role(request) == "student":
         page = page.replace('<a class="nav-link" href="/admin"><span aria-hidden="true">▤</span>文档管理</a>', "")
+        page = page.replace('<a class="nav-link" href="/prep"><span aria-hidden="true">▧</span>讲义生成</a>', "")
+    return HTMLResponse(page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True)))
+
+
+@app.get("/prep", include_in_schema=False)
+def prep_page(request: Request):
+    role = current_role(request)
+    if role != "teacher":
+        return RedirectResponse("/qa" if role else "/login", status_code=303)
+    page = (Path(__file__).parent / "static" / "prep.html").read_text(encoding="utf-8")
     return HTMLResponse(page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True)))

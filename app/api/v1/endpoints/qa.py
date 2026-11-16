@@ -13,19 +13,22 @@ from app.rag.retrieval.hybrid import available_scopes, retrieve
 router = APIRouter(prefix="/qa")
 
 
-class Question(BaseModel):
+class LessonScope(BaseModel):
     subject: str = "english"
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
     grade: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)]
     unit_start: int = Field(ge=1, le=20)
     unit_end: int = Field(ge=1, le=20)
-    top_k: int = Field(default=5, ge=1, le=10)
 
     @model_validator(mode="after")
     def validate_range(self):
         if self.unit_end < self.unit_start:
             raise ValueError("结束单元必须大于等于起始单元")
         return self
+
+
+class Question(LessonScope):
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+    top_k: int = Field(default=5, ge=1, le=10)
 
 
 @router.get("/scopes")

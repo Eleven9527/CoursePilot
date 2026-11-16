@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>讲义生成 · CoursePilot</title>
+  <link rel="stylesheet" href="/assets/sidebar.css?v=2">
+  <style>
+    * {box-sizing:border-box}
+    body {margin:0;background:#f2f6f3;color:#172b2b;font:16px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+    .layout {min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}
+    main {width:100%;max-width:780px;margin:auto auto auto;align-self:start;margin-top:0;padding:36px 20px}
+    h1 {font-size:32px;margin:0 0 24px}
+    .settings {background:white;border:1px solid #d7e4db;border-radius:14px;padding:24px}
+    .scope {display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:14px;margin-bottom:18px}
+    label {display:block;font-weight:600}
+    select {display:block;width:100%;font:inherit;margin-top:5px;padding:8px 10px;border:1px solid #aebfb6;border-radius:8px;background:white;color:inherit}
+    .goals {border-top:1px solid #d7e4db;padding-top:16px}
+    .goals h2 {font-size:18px;margin:0 0 6px}
+    .goals ul {margin:8px 0 0;padding-left:24px}
+    .notice {color:#405850;margin:16px 0 0}
+    .primary {margin-top:16px;padding:9px 16px;border:0;border-radius:8px;background:#17634b;color:white;font:inherit;cursor:pointer}
+    .primary:disabled {opacity:.55}
+    .preview {margin-top:20px}
+    .preview pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+    [v-cloak] {display:none}
+    @media(max-width:950px){.layout{grid-template-columns:190px minmax(0,1fr)}}
+    @media(max-width:680px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">My Agent<small>课程资料助教</small></div>
+    <nav aria-label="工作台">
+      <div class="nav-label">工作台</div>
+      <a class="nav-link" href="/admin"><span aria-hidden="true">▤</span>文档管理</a>
+      <a class="nav-link" href="/qa"><span class="nav-chat" aria-hidden="true"></span>课程问答</a>
+      <a class="nav-link" href="/prep" aria-current="page"><span aria-hidden="true">▧</span>讲义生成</a>
+    </nav>
+    <form class="sidebar-logout" action="/logout" method="post">
+      <button class="nav-link" type="submit">退出登录</button>
+    </form>
+  </aside>
+  <main id="prep-app" data-api-prefix="__QA_API_PREFIX__" v-cloak>
+    <h1>讲义生成</h1>
+    <section class="settings" aria-label="讲义设置">
+      <div class="scope">
+        <label>科目<select v-model="subject">
+          <option v-for="(label, key) in subjects" :key="key" :value="key">{{ label }}</option>
+        </select></label>
+        <label>年级<select v-model="grade" :disabled="!Object.keys(scopes).length">
+          <option v-for="grade in Object.keys(scopes)" :key="grade" :value="grade">{{ grade }}</option>
+        </select></label>
+        <label>起始单元<select v-model.number="start" :disabled="!units.length">
+          <option v-for="unit in units" :key="unit" :value="unit">第 {{ unit }} 单元</option>
+        </select></label>
+        <label>结束单元<select v-model.number="end" :disabled="!endUnits.length">
+          <option v-for="unit in endUnits" :key="unit" :value="unit">第 {{ unit }} 单元</option>
+        </select></label>
+      </div>
+      <div v-if="lessonScope" class="goals">
+        <h2>教学目标</h2>
+        <div>{{ lessonScope }}</div>
+        <ul>
+          <li><strong>知识目标</strong> · 掌握所选单元的核心概念和常见知识点。</li>
+          <li><strong>技能目标</strong> · 运用所学知识完成典型练习，并说明解题思路。</li>
+          <li><strong>情感目标</strong> · 主动回顾学习内容，发现并订正易错点。</li>
+        </ul>
+      </div>
+      <p v-if="status" class="notice" role="status">{{ status }}</p>
+      <p v-if="generationError" class="notice" role="alert">{{ generationError }}</p>
+      <button class="primary" :disabled="busy || !lessonScope" @click="generate">{{ busy ? '正在生成…' : '生成讲义' }}</button>
+    </section>
+    <section v-if="draft" class="settings preview">
+      <label>预览版本<select v-model="version">
+        <option value="student">学生学案</option>
+        <option value="teacher">教师教案</option>
+      </select></label>
+      <label>文件格式<select v-model="format">
+        <option value="docx">Word（.docx）</option>
+        <option value="md">Markdown（.md）</option>
+      </select></label>
+      <button class="primary" :disabled="exporting" @click="download">{{ exporting ? '正在导出…' : '下载讲义' }}</button>
+      <p v-if="exportError" class="notice" role="alert">{{ exportError }}</p>
+      <pre>{{ draft[version] }}</pre>
+      <div v-if="version === 'teacher'">
+        <h2>引用资料</h2>
+        <details v-for="source in draft.sources" :key="source.number">
+          <summary>[{{ source.number }}] {{ source.title }} · {{ source.heading || source.unit }}</summary>
+          <pre>{{ source.text }}</pre>
+        </details>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/assets/vue.global.prod.js"></script>
+<script>
+  const root = document.querySelector('#prep-app');
+  const api = root.dataset.apiPrefix + '/qa';
+  Vue.createApp({
+    data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
+                  status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
+                  version: 'student', format: 'docx', exporting: false, exportError: '', generationError: ''}),
+    computed: {
+      units() { return this.scopes[this.grade] || []; },
+      endUnits() { return this.units.filter(unit => unit >= this.start); },
+      lessonScope() {
+        if (!this.grade || !this.units.includes(this.start) || !this.endUnits.includes(this.end)) return '';
+        const unit = this.start === this.end ? `第 ${this.start} 单元` : `第 ${this.start}–${this.end} 单元`;
+        return [this.subjects[this.subject], this.grade, unit].join(' · ');
+      },
+    },
+    watch: {
+      lessonScope() { this.draft = null; this.generationError = ''; },
+      subject: 'loadScopes',
+      grade() { this.start = this.units[0] ?? null; this.end = this.start; },
+      start() { if (!this.endUnits.includes(this.end)) this.end = this.start; },
+    },
+    async mounted() {
+      try {
+        this.subjects = await this.request('/subjects');
+        this.subject = Object.keys(this.subjects)[0] || '';
+        if (!this.subject) this.status = '暂无可用科目。';
+      } catch (error) {
+        this.status = error.message;
+      }
+    },
+    methods: {
+      async generate() {
+        if (this.busy || !this.lessonScope) return;
+        this.busy = true;
+        this.draft = null;
+        this.generationError = '';
+        const scope = this.lessonScope;
+        try {
+          const response = await fetch(root.dataset.apiPrefix + '/prep/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({subject: this.subject, grade: this.grade,
+                                  unit_start: this.start, unit_end: this.end}),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '生成失败');
+          if (scope === this.lessonScope) {
+            this.version = 'student';
+            this.draft = data;
+          }
+        } catch (error) {
+          if (scope === this.lessonScope) this.generationError = error.message;
+        } finally {
+          this.busy = false;
+        }
+      },
+      async download() {
+        if (!this.draft || this.exporting) return;
+        this.exportError = '';
+        const {version, format} = this;
+        const references = this.version === 'teacher'
+          ? '\n\n## 引用资料\n\n' + this.draft.sources.map(source =>
+              `[${source.number}] ${source.filename} · ${source.heading || source.unit} · 文本块 ${source.chunk_index}`).join('\n')
+          : '';
+        const content = this.draft[version] + references;
+        this.exporting = true;
+        try {
+          let file;
+          if (format === 'docx') {
+            const response = await fetch(root.dataset.apiPrefix + '/prep/export/docx', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({version, content}),
+            });
+            if (!response.ok) throw new Error('Word 导出失败，请确认教师登录状态后重试。');
+            file = await response.blob();
+          } else {
+            file = new Blob([content], {type: 'text/markdown;charset=utf-8'});
+          }
+          const url = URL.createObjectURL(file);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = (version === 'student' ? '学生学案' : '教师教案') + '.' + format;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) {
+          this.exportError = error.message;
+        } finally {
+          this.exporting = false;
+        }
+      },
+      async request(path) {
+        const response = await fetch(api + path);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '读取资料范围失败');
+        return data;
+      },
+      async loadScopes(subject) {
+        const version = ++this.scopeRequest;
+        this.scopes = {};
+        this.grade = '';
+        this.status = '正在读取可用资料…';
+        try {
+          const scopes = await this.request('/scopes?subject=' + encodeURIComponent(subject));
+          if (version !== this.scopeRequest) return;
+          this.scopes = scopes;
+          this.grade = Object.keys(scopes)[0] || '';
+          this.status = this.grade ? '' : '该科目暂无可用资料。';
+        } catch (error) {
+          if (version === this.scopeRequest) this.status = error.message;
+        }
+      },
+    },
+  }).mount(root);
+</script>
+</body>
+</html>
