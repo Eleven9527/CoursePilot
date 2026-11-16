@@ -1,0 +1,59 @@
+"""Run the course QA fixture against a running CoursePilot API."""
+
+import argparse
+import json
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import ProxyHandler, Request, build_opener
+
+from evals.retrieval import normalize
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/v1/qa")
+    parser.add_argument("--top-k", type=int, choices=range(1, 11), default=5)
+    parser.add_argument("--output", type=Path, default=Path("data/qa-eval.json"))
+    args = parser.parse_args()
+
+    fixture = json.loads(Path(__file__).with_name("units_1_2.json").read_text(encoding="utf-8"))
+    scope = {"grade": "高一", "unit_start": 1, "unit_end": 2, "top_k": args.top_k}
+    opener = build_opener(ProxyHandler({}))
+    results = []
+    for case in fixture["cases"]:
+        row = {"id": case["id"], "question": case["question"], "expected_answer": case["answer"]}
+        results.append(row)
+        body = json.dumps({**scope, "question": case["question"]}).encode()
+        for endpoint in (("search", "ask") if case["evidence"] else ("ask",)):
+            request = Request(f"{args.api_url.rstrip('/')}/{endpoint}", data=body,
+                              headers={"Content-Type": "application/json"})
+            try:
+                with opener.open(request, timeout=100) as response:
+                    row[endpoint] = json.load(response)
+            except (URLError, OSError, ValueError) as exc:
+                row.setdefault("errors", {})[endpoint] = str(exc)
+        for endpoint in ("search", "ask"):
+            if endpoint in row and case["evidence"]:
+                texts = [normalize(source["text"]) for source in row[endpoint]["sources"]
+                         if source["filename"] == fixture["source_filename"]]
+                row[f"{endpoint}_evidence"] = [
+                    any(all(normalize(part) in text for part in group) for text in texts)
+                    for group in case["evidence"]
+                ]
+        if not case["evidence"] and "ask" in row:
+            row["empty_citations"] = not row["ask"]["sources"]
+        checks = [*row.get("search_evidence", []), *row.get("ask_evidence", []),
+                  row.get("empty_citations", True)]
+        row["automatic_pass"] = not row.get("errors") and all(checks)
+        print(f"{case['id']}: {'PASS' if row['automatic_pass'] else 'FAIL'}", flush=True)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps({"scope": scope, "results": results}, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+    passed = sum(row["automatic_pass"] for row in results)
+    print(f"Automatic checks: {passed}/{len(results)}. Review answers in {args.output}")
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

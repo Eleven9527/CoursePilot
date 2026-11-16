@@ -13,3 +13,6 @@ eval-validate:
 
 eval-retrieval:
 	"$(PYTHON)" -m evals.retrieval --top-k $(TOP_K)
+.PHONY: eval-qa
+eval-qa:
+	"$(PYTHON)" -m evals.qa --top-k $(TOP_K)

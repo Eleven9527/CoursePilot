@@ -174,3 +174,11 @@ macOS
 - 对 Q01–Q08 调用 `POST /api/v1/qa/search`，检查返回的文本块是否包含各题的全部预期依据。Q08 需要两处依据同时命中。
 - 对 Q01–Q10 调用 `POST /api/v1/qa/ask`，对照预期答案，核对引用是否支持回答。Q09 和 Q10 检查依据不足时的表现。
 - `make eval-retrieval` 跑纯向量检索基线。问答接口还包含范围过滤、查询改写、关键词召回和结果融合，验收时单独记录它的结果。
+
+使用 `make eval-qa` 批量验收运行中的问答服务，或在 Windows PowerShell 执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.qa --top-k 5
+```
+
+自动检查包括 Top K 依据命中、回答引用是否覆盖依据，以及无依据题是否返回空引用。报告默认写到 `data/qa-eval.json`，其中的答案和引用需要人工核对。退出码为 1 表示至少有一条自动检查失败。
