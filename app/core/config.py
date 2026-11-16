@@ -25,6 +25,8 @@ class Settings:
     chat_model: str = os.getenv("CHAT_MODEL", "").strip()
     chat_base_url: str = os.getenv("CHAT_BASE_URL", "").strip()
     chat_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
+    jev_api_key: str = os.getenv("JEV_API_KEY", "").strip()
+    jev_model: str = os.getenv("JEV_MODEL", "").strip() or "jev-latest"
     data_dir: Path = Path(os.getenv("DATA_DIR", "data"))
     mineru_executable: str = os.getenv("MINERU_EXECUTABLE", "").strip()
     mineru_tier_pdf: str = os.getenv("MINERU_TIER_PDF", "basic").strip()

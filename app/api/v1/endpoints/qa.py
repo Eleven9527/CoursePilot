@@ -1,9 +1,12 @@
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.rag.generation.chat import chat_json
+from app.rag.generation.intents import INTENTS, routing_instructions
+from app.rag.generation.jev import classify_intent
 from app.rag.retrieval.hybrid import available_scopes, retrieve
 
 router = APIRouter(prefix="/qa")
@@ -28,33 +31,42 @@ def scopes() -> dict[str, list[int]]:
     return available_scopes()
 
 
-def search_question(body: Question) -> list[dict]:
+def search_question(body: Question) -> tuple[list[dict], str]:
     rewrite = ""
+    jev_intent = classify_intent(body.question)
+    intent = jev_intent or "general_qa"
     try:
-        rewritten = chat_json(
-            '把问题改写为检索课程资料用的一条短查询。保留题号、人名和英文短语，'
-            '可补充中英文同义表达。不要回答问题。只输出 JSON {"query":"..."}。',
+        routing = chat_json(
+            routing_instructions() if jev_intent is None else (
+                '将问题改写为检索课程资料用的一条短查询。保留题号、人名和英文短语。'
+                '只输出 JSON {"query":"..."}。'
+            ),
             {"question": body.question},
-        ).get("query")
+        )
+        rewritten = routing.get("query")
         if isinstance(rewritten, str):
             rewrite = rewritten.strip()[:1000]
+        predicted = routing.get("intent")
+        if jev_intent is None and isinstance(predicted, str) and predicted in INTENTS:
+            intent = predicted
     except RuntimeError:
         pass
     try:
-        return retrieve(body.question, body.grade, body.unit_start, body.unit_end, body.top_k, rewrite)
+        return retrieve(body.question, body.grade, body.unit_start, body.unit_end, body.top_k, rewrite), intent
     except (RuntimeError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "检索服务暂不可用，请检查 Embedding 和 Milvus") from exc
 
 
 @router.post("/search")
 def search(body: Question) -> dict:
-    return {"sources": search_question(body)}
+    sources, intent = search_question(body)
+    return {"sources": sources, "intent": intent}
 
 
 @router.post("/ask")
 def ask(body: Question) -> dict:
-    sources = search_question(body)
-    insufficient = {"answer": "所选年级和单元的资料中找不到足够依据。", "sources": []}
+    sources, intent = search_question(body)
+    insufficient = {"answer": "所选年级和单元的资料中找不到足够依据。", "sources": [], "intent": intent}
     if not sources:
         return insufficient
     try:
@@ -68,7 +80,8 @@ def ask(body: Question) -> dict:
             '列举选项或多个要点时每项单独一行。'
             '在答案里用 [1] 这样的编号标注出处。找不到指定题目、单元或所需依据时，'
             '只说明依据不足，citations 返回空数组，结束回答。'
-            '只输出 JSON {"answer":"...","citations":[1,2]}。',
+            '只输出 JSON {"answer":"...","citations":[1,2]}。'
+            f'本次回答规则：{INTENTS[intent][1]} 本次规则优先于上述通用回答方式。',
             {"question": body.question, "sources": [
                 {"number": number, "text": source["text"]}
                 for number, source in enumerate(sources, 1)
@@ -82,6 +95,9 @@ def ask(body: Question) -> dict:
         return insufficient
     if any(type(index) is not int or not 1 <= index <= len(sources) for index in citations):
         return insufficient
-    return {"answer": answer, "sources": [
+    if intent == "homework_hint":
+        # The original chunks include answer keys.
+        return {"answer": re.sub(r"\[\d+\]", "", answer).strip(), "intent": intent, "sources": []}
+    return {"answer": answer, "intent": intent, "sources": [
         {**sources[index - 1], "number": index} for index in dict.fromkeys(citations)
     ]}
