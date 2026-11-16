@@ -19,6 +19,9 @@
     #status{margin:0 0 14px;color:#405850} #answer p,blockquote{white-space:pre-wrap;overflow-wrap:anywhere} h2{margin-top:0;font-size:21px}
     #answer p{margin:0;line-height:1.8} #answer p+p{margin-top:14px}
     .answer-sources{margin-top:20px}.answer-sources h3{font-size:14px;color:#405850;margin:0 0 6px}
+    .answer-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 14px;margin-bottom:14px}
+    .answer-heading h2{margin:0}
+    .answer-intent{font-size:13px;color:#405850;overflow-wrap:anywhere}
     details{border-top:1px solid #d7e4db;padding:12px 0} summary{cursor:pointer} blockquote{margin:10px 0 0;padding-left:12px;border-left:3px solid #a6c8b7}
   </style>
   <link rel="stylesheet" href="/assets/sidebar.css">
@@ -52,7 +55,10 @@
   </form>
   <p v-if="status" id="status" role="status">{{ status }}</p>
   <section v-if="result">
-    <h2>回答</h2>
+    <div class="answer-heading">
+      <h2>回答</h2>
+      <span v-if="result.intent" class="answer-intent">识别意图 · {{ intentLabel }} <code v-if="intentLabel !== result.intent">{{ result.intent }}</code></span>
+    </div>
     <div id="answer">
       <p v-for="(paragraph, index) in answerParagraphs" :key="index">{{ paragraph }}</p>
     </div>
@@ -77,6 +83,16 @@
               busy: false, status: '正在读取可用资料…', result: null};
     },
     computed: {
+      intentLabel() {
+        const labels = new Map([
+          ['material_lookup', '资料定位'],
+          ['concept_explanation', '概念解释'],
+          ['homework_hint', '作业提示'],
+          ['general_qa', '通用问答'],
+        ]);
+        const intent = this.result?.intent;
+        return labels.get(intent) ?? intent;
+      },
       answerParagraphs() {
         return (this.result?.answer || '').split(/\r?\n[ \t]*\r?\n|(?<=[。！？])[ \t]*(?=第\s*[一二三四五六七八九十百\d]+\s*题)/u)
           .map(paragraph => paragraph.trim()).filter(Boolean);
