@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import ProxyHandler, Request, build_opener
@@ -32,7 +33,16 @@ def main() -> int:
                     row[endpoint] = json.load(response)
             except (URLError, OSError, ValueError) as exc:
                 row.setdefault("errors", {})[endpoint] = str(exc)
+        expected_intent = case.get("intent")
+        if expected_intent:
+            row["expected_intent"] = expected_intent
+            row["intent_matches"] = {
+                endpoint: row.get(endpoint, {}).get("intent") == expected_intent
+                for endpoint in ("search", "ask")
+            }
         for endpoint in ("search", "ask"):
+            if endpoint == "ask" and "forbidden" in case:
+                continue
             if endpoint in row and case["evidence"]:
                 texts = [normalize(source["text"]) for source in row[endpoint]["sources"]
                          if source["filename"] == fixture["source_filename"]]
@@ -42,7 +52,14 @@ def main() -> int:
                 ]
         if not case["evidence"] and "ask" in row:
             row["empty_citations"] = not row["ask"]["sources"]
-        checks = [*row.get("search_evidence", []), *row.get("ask_evidence", []),
+        if "forbidden" in case and "ask" in row:
+            row["empty_citations"] = not row["ask"]["sources"]
+            answer = normalize(row["ask"]["answer"])
+            row["hint_has_no_answer"] = bool(answer) and not any(
+                re.search(pattern, answer, re.IGNORECASE) for pattern in case["forbidden"]
+            )
+        checks = [*row.get("intent_matches", {}).values(), row.get("hint_has_no_answer", True),
+                  *row.get("search_evidence", []), *row.get("ask_evidence", []),
                   row.get("empty_citations", True)]
         row["automatic_pass"] = not row.get("errors") and all(checks)
         print(f"{case['id']}: {'PASS' if row['automatic_pass'] else 'FAIL'}", flush=True)

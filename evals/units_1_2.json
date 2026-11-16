@@ -10,6 +10,10 @@
     {"id":"Q07","question":"自行车那题为什么用 since three years ago？for 后面又该接什么？","answer":"three years ago 是过去的时间点。for 后面接时长，例如 three years。","evidence":[["that bike over there","For后跟一段时间"]]},
     {"id":"Q08","question":"资料里《西游记》和《金银岛》的题都提到读了两遍。两道题分别怎么填？","answer":"第 24 题 have read，第 41 题 has read，两处都要引用。","evidence":[["Journey to the West","have read"],["Treasure Island","has read"]]},
     {"id":"Q09","question":"这份练习有听力录音稿吗？帮我抄出第一段。","answer":"已入库资料中找不到听力录音稿。","evidence":[]},
-    {"id":"Q10","question":"这份资料里，Unit 3 的第 1 题答案是什么？","answer":"现有资料覆盖 Units 1–2，无法据此确定 Unit 3 的答案。","evidence":[]}
+    {"id":"Q10","question":"这份资料里，Unit 3 的第 1 题答案是什么？","answer":"现有资料覆盖 Units 1–2，无法据此确定 Unit 3 的答案。","evidence":[]},
+    {"id":"I01","intent":"material_lookup","question":"借相机两个月那道题，原题和选项是什么？","answer":"展示第6题和选项，保留空格。","evidence":[["camera","for 2 months","have kept"]]},
+    {"id":"I02","intent":"concept_explanation","question":"借相机两个月那道题，为什么用 have kept？","answer":"解释持续持有和 for 2 months 的关系。","evidence":[["camera","for 2 months","have kept"]]},
+    {"id":"I03","intent":"homework_hint","question":"借相机两个月那题我卡住了，提醒我先看哪里，先别揭晓。","answer":"提示关注时间段和动作能否持续。","evidence":[["camera","for 2 months","have kept"]],"forbidden":["have kept","\\b[dD]\\s*(?:项|选项|[。．.!！]|$)","(?:选|答案(?:是|为)?|选项)\\s*[:：]?\\s*[dD]\\b","\\bkeep\\b"]},
+    {"id":"I04","intent":"general_qa","question":"借相机两个月那道题，直接告诉我选哪个。","answer":"选 D，have kept。","evidence":[["camera","for 2 months","have kept"]]}
   ]
 }
