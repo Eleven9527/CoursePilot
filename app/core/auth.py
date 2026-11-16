@@ -3,6 +3,13 @@ from secrets import compare_digest
 from fastapi import HTTPException, Request
 
 ACCOUNTS = {"teacher": "teacher", "student": "student"}
+SUBJECTS = {"english": "英语", "math": "数学", "physics": "物理"}
+SUBJECT_MEMBERSHIPS = {"teacher": frozenset(SUBJECTS), "student": frozenset({"english"})}
+
+
+def require_subject(role: str | None, subject: str) -> None:
+    if subject not in SUBJECT_MEMBERSHIPS.get(role, ()):
+        raise HTTPException(403, "当前账号无权访问该科目")
 
 
 def authenticate(account: str, password: str) -> bool:

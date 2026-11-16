@@ -24,20 +24,23 @@ def unit_range(label: str) -> tuple[int, int] | None:
     return None
 
 
-def _indexed_documents(grade: str | None = None) -> list[dict]:
+def _indexed_documents(subject: str, include_drafts: bool, grade: str | None = None) -> list[dict]:
     sql = """SELECT doc.id,doc.title,doc.filename,doc.grade,doc.unit,doc.current_task_id
         FROM documents AS doc JOIN parse_task_steps AS step
         ON step.task_id=doc.current_task_id AND step.document_id=doc.id
         WHERE step.step_key='embedding' AND step.status='succeeded'
+        AND doc.subject=? AND doc.parsing_status='succeeded'
+        AND (? OR doc.published_at IS NOT NULL)
         AND EXISTS (SELECT 1 FROM document_chunks AS chunk WHERE chunk.task_id=doc.current_task_id)"""
     with connect() as connection:
-        rows = connection.execute(sql + (" AND doc.grade=?" if grade else ""), (grade,) if grade else ()).fetchall()
+        params = (subject, include_drafts, grade) if grade else (subject, include_drafts)
+        rows = connection.execute(sql + (" AND doc.grade=?" if grade else ""), params).fetchall()
     return [dict(row) for row in rows]
 
 
-def available_scopes() -> dict[str, list[int]]:
+def available_scopes(subject: str, include_drafts: bool) -> dict[str, list[int]]:
     scopes: dict[str, set[int]] = {}
-    for doc in _indexed_documents():
+    for doc in _indexed_documents(subject, include_drafts):
         bounds = unit_range(doc["unit"])
         if bounds and doc["grade"] != "未指定":
             scopes.setdefault(doc["grade"], set()).update(range(bounds[0], bounds[1] + 1))
@@ -65,9 +68,10 @@ def _keyword_rank(chunks: dict[str, dict], queries: list[str], limit: int) -> li
     return sorted(scores, key=lambda key: (-scores[key], key))[:limit]
 
 
-def retrieve(question: str, grade: str, start: int, end: int, top_k: int, rewrite: str = "") -> list[dict]:
+def retrieve(question: str, grade: str, start: int, end: int, top_k: int, rewrite: str = "",
+             *, subject: str, include_drafts: bool) -> list[dict]:
     documents = {}
-    for doc in _indexed_documents(grade):
+    for doc in _indexed_documents(subject, include_drafts, grade):
         bounds = unit_range(doc["unit"])
         if bounds and bounds[0] <= end and start <= bounds[1]:
             documents[doc["current_task_id"]] = doc

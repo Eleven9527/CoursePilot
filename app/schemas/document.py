@@ -10,6 +10,8 @@ class DocumentStepState(BaseModel):
 
 class DocumentResponse(BaseModel):
     id: str
+    subject: str
+    published_at: datetime | None = None
     title: str
     grade: str
     unit: str

@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from docx import Document as WordDocument
 
 from app.core.config import settings
+from app.core.auth import SUBJECTS
 from app.core.enums import ParseStepKey, ParseStepStatus
 from app.schemas.document import DocumentResponse, ParseStepResponse, ParseTaskResponse
 from app.services import document_service
@@ -224,7 +225,10 @@ async def create_document(
     grade: str = Form(...),
     unit: str = Form(...),
     description: str = Form(""),
+    subject: str = Form("english"),
 ) -> dict:
+    if subject not in SUBJECTS:
+        raise HTTPException(400, "请选择有效的科目")
     if grade not in ALLOWED_GRADES:
         raise HTTPException(400, "请选择有效的年级")
     if not _valid_unit(unit):
@@ -234,7 +238,7 @@ async def create_document(
     resolved_title = title.strip() or Path(filename).stem
     document = document_service.create_document(
         document_id, resolved_title, grade, unit, description.strip(), filename,
-        stored_name, file_type, size_bytes,
+        stored_name, file_type, size_bytes, subject=subject,
     )
     return document
 
@@ -247,7 +251,10 @@ async def update_document(
     unit: str = Form(...),
     description: str = Form(""),
     file: UploadFile | None = File(None),
+    subject: str | None = Form(None),
 ) -> dict:
+    if subject is not None and subject not in SUBJECTS:
+        raise HTTPException(400, "请选择有效的科目")
     existing = document_service.get_document(document_id)
     if existing is None:
         raise HTTPException(404, "文档不存在")
@@ -257,7 +264,7 @@ async def update_document(
         raise HTTPException(400, "请选择有效的单元")
     replacement = await _save_upload(file) if file and file.filename else None
     new_record = document_service.update_document(
-        document_id, title.strip(), grade, unit, description.strip(), replacement
+        document_id, title.strip(), grade, unit, description.strip(), replacement, subject=subject
     )
     if replacement:
         old_path = settings.upload_dir / existing["stored_name"]
@@ -271,6 +278,12 @@ async def update_document(
         if task_id:
             new_record = document_service.get_document(document_id) or new_record
     return new_record
+
+
+@router.put("/{document_id}/publication", status_code=204)
+def set_publication(document_id: str, published: bool) -> None:
+    if not document_service.set_publication(document_id, published):
+        raise HTTPException(404, "文档不存在")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

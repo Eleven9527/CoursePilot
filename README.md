@@ -190,3 +190,14 @@ macOS
 ## 本地演示登录
 
 启动项目后打开 `http://127.0.0.1:8000/login`。下拉框可选教师或学生，两个账号的密码都是 `123`。教师进入资料管理，也可以使用课程问答。学生进入课程问答，访问资料管理 API 会被拒绝。应用重启后需要重新登录。`make eval-qa` 会自动用学生账号登录。演示账号面向本机开发环境。
+
+## 课程权限测试
+
+安装开发依赖后，在项目根目录执行 `make test-permissions`。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q tests/test_qa_permissions.py
+```
+
+测试使用临时 SQLite 和合成资料，验证学生只召回已发布的英语资料、拒绝越权科目和发布请求，以及教师可以预览草稿。它模拟 Milvus 和对话模型，并检查传入模型的片段以及最终引用。无需启动 CoursePilot API 或外部服务。

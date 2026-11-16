@@ -53,9 +53,9 @@
       <section class="content" id="admin-app" v-cloak>
         <div class="card">
           <div class="card-head"><h2>文档列表</h2><span class="muted">{{ loading ? '加载中…' : `共 ${documents.length} 份资料` }}</span></div>
-          <div class="table-wrap"><table><thead><tr><th>文档</th><th>年级</th><th>单元</th><th>类型</th><th>原文件</th><th>MinerU 解析</th><th>文本切分</th><th>向量化</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody>
+          <div class="table-wrap"><table><thead><tr><th>文档</th><th>科目</th><th>年级</th><th>单元</th><th>类型</th><th>原文件</th><th>MinerU 解析</th><th>文本切分</th><th>向量化</th><th>大小</th><th>添加时间</th><th>操作</th></tr></thead><tbody>
             <tr v-if="loading || loadError || !documents.length">
-              <td colspan="11" :class="loading ? 'loading' : 'empty'">
+              <td colspan="12" :class="loading ? 'loading' : 'empty'">
                 <template v-if="loading">正在读取文档…</template>
                 <template v-else-if="loadError">{{ loadError }}</template>
                 <template v-else><strong>资料库还是空的</strong>从右侧上传第一份课程文档</template>
@@ -63,14 +63,14 @@
             </tr>
             <tr v-for="doc in documents" v-else :key="doc.id">
               <td><div class="doc-name" :title="doc.filename">{{ doc.title }}</div><div class="muted">{{ doc.filename }}</div></td>
-              <td>{{ doc.grade || '未指定' }}</td><td>{{ doc.unit || '未指定' }}</td>
+              <td>{{ subjects[doc.subject] }}</td><td>{{ doc.grade || '未指定' }}</td><td>{{ doc.unit || '未指定' }}</td>
               <td><span class="file-badge">{{ doc.file_type }}</span></td>
               <td v-for="key in documentStepKeys" :key="key">
                 <span class="parse-state" :class="'state-' + (doc.steps?.[key]?.status || 'not_started')">{{ doc.steps?.[key] ? (parseLabels[doc.steps[key].status] || '未知') : '未开始' }}</span>
                 <div v-if="doc.steps?.[key]?.error" class="parse-error" :title="doc.steps[key].error">{{ doc.steps[key].error }}</div>
               </td>
               <td>{{ formatSize(doc.size_bytes) }}</td><td>{{ formatDate(doc.created_at) }}</td>
-              <td class="actions">
+              <td class="actions"><button class="btn btn-quiet btn-small" :disabled="pending.has(doc.id)" @click="togglePublication(doc)">{{ doc.published_at ? '撤回发布' : '发布' }}</button>
                 <button v-if="doc.steps?.embedding?.status === 'failed'" class="btn btn-quiet btn-small" :disabled="pending.has(doc.id)" @click="retry(doc, true)">重试向量化</button>
                 <button class="btn btn-quiet btn-small" @click="openReview(doc.id)">校验</button>
                 <button v-if="!hasActiveStep(doc)" class="btn btn-quiet btn-small" :disabled="pending.has(doc.id)" @click="retry(doc)">重新解析</button>
@@ -82,7 +82,7 @@
         </div>
         <section class="card form-card">
           <h2>{{ editing ? '编辑文档' : '添加文档' }}</h2><p class="form-intro">{{ editing ? `当前文件：${editing.filename}。可以修改信息，也可以选择新文件替换。` : '上传课程资料，支持 PDF、Markdown 与 DOCX，单个文件最大 20 MB。' }}</p>
-          <form @submit.prevent="save">
+          <form @submit.prevent="save"><div class="field"><label>科目<select name="subject" v-model="draft.subject"><option v-for="(label, key) in subjects" :key="key" :value="key">{{ label }}</option></select></label></div>
             <div class="field"><label for="title">文档名称</label><input id="title" ref="titleInput" v-model="draft.title" name="title" maxlength="200" placeholder="例如：第 1 周课程讲义"></div>
             <div class="field"><label for="grade">适用年级</label><select id="grade" v-model="draft.grade" name="grade" required><option value="" disabled selected>请选择年级</option><optgroup label="小学"><option>一年级</option><option>二年级</option><option>三年级</option><option>四年级</option><option>五年级</option><option>六年级</option></optgroup><optgroup label="初中"><option>初一</option><option>初二</option><option>初三</option></optgroup><optgroup label="高中"><option>高一</option><option>高二</option><option>高三</option></optgroup><option value="未指定">未指定</option></select></div>
             <div class="field">
@@ -237,7 +237,8 @@
         const loading = ref(true);
         const loadError = ref('');
         const pending = reactive(new Set());
-        const emptyDraft = () => ({title: '', grade: '', unit: '', description: '', range: false, start: 1, end: 2});
+        const subjects = ref({});
+        const emptyDraft = () => ({subject: 'english', title: '', grade: '', unit: '', description: '', range: false, start: 1, end: 2});
         const draft = reactive(emptyDraft());
         const endUnits = computed(() => units.filter(unit => unit > draft.start));
         const unitValue = computed(() => draft.range ? `第${draft.start}-${draft.end}单元` : draft.unit);
@@ -273,7 +274,7 @@
           if (saving.value) return;
           resetForm();
           editing.value = doc;
-          Object.assign(draft, {title: doc.title, grade: doc.grade || '未指定',
+          Object.assign(draft, {subject: doc.subject, title: doc.title, grade: doc.grade || '未指定',
                                unit: doc.unit || '未指定', description: doc.description || ''});
           const range = draft.unit.match(/^第(\d+)-(\d+)单元$/);
           if (range) Object.assign(draft, {range: true, start: Number(range[1]), end: Number(range[2])});
@@ -331,11 +332,19 @@
           });
         }
 
-        onMounted(loadDocuments);
+        function togglePublication(doc) {
+          return changeDocument(doc, () => request(`${API}/${doc.id}/publication?published=${!doc.published_at}`, {method:'PUT'}));
+        }
+
+        onMounted(async () => {
+          try { subjects.value = await request('/api/v1/qa/subjects'); }
+          catch (error) { notify(error.message, true); }
+          await loadDocuments();
+        });
         onUnmounted(() => { requestVersion++; clearTimeout(pollTimer); });
         return {documents, loading, loadError, pending, documentStepKeys, parseLabels, formatSize, formatDate,
                 hasActiveStep, openReview, units, endUnits, unitValue, titleInput, fileInput, editing, saving,
-                draft, resetForm, edit, save, retry, remove};
+                draft, resetForm, edit, save, retry, remove, subjects, togglePublication};
       },
     }).mount('#admin-app');
   </script>

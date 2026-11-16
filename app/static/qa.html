@@ -43,7 +43,7 @@
 <main id="qa-app" v-cloak data-api-prefix="__QA_API_PREFIX__">
   <header><h1>课程问答</h1></header>
   <form @submit.prevent="ask">
-    <div class="scope">
+    <div class="scope"><label>科目<select v-model="subject" @change="loadScopes" :disabled="busy"><option v-for="(label, key) in subjects" :key="key" :value="key">{{ label }}</option></select></label>
       <label>年级<select v-model="grade" required>
         <option v-for="item in Object.keys(scopes)" :key="item" :value="item">{{ item }}</option>
       </select></label>
@@ -83,7 +83,7 @@
 
   Vue.createApp({
     data() {
-      return {scopes: {}, grade: '', start: null, end: null, question: '',
+      return {subjects: {}, subject: '', scopes: {}, grade: '', start: null, end: null, question: '',
               busy: false, status: '正在读取可用资料…', result: null};
     },
     computed: {
@@ -110,14 +110,29 @@
     },
     async mounted() {
       try {
-        this.scopes = await this.request('/scopes');
-        this.grade = Object.keys(this.scopes)[0] || '';
-        this.status = this.grade ? '' : '暂无已完成向量化且标注年级和单元的资料。';
+        this.subjects = await this.request('/subjects');
+        this.subject = Object.keys(this.subjects)[0] || '';
+        await this.loadScopes();
       } catch (error) {
         this.status = error.message;
       }
     },
     methods: {
+      async loadScopes() {
+        this.grade = '';
+        this.result = null;
+        const subject = this.subject;
+        this.status = '正在读取可用资料…';
+        try {
+          const scopes = await this.request('/scopes?subject=' + encodeURIComponent(subject));
+          if (this.subject !== subject) return;
+          this.scopes = scopes;
+          this.grade = Object.keys(scopes)[0] || '';
+          this.status = this.grade ? '' : '该科目暂无可检索资料。';
+        } catch (error) {
+          if (this.subject === subject) this.status = error.message;
+        }
+      },
       async request(path, options) {
         const response = await fetch(api + path, options);
         const data = await response.json();

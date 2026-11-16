@@ -30,6 +30,8 @@ def initialize_database() -> None:
         )
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")} if not settings.database_url else set()
         migrations = {
+            "subject": "TEXT NOT NULL DEFAULT 'english'",
+            "published_at": "TEXT",
             "grade": "TEXT NOT NULL DEFAULT '未指定'",
             "unit": "TEXT NOT NULL DEFAULT '未指定'",
             "parsing_status": "TEXT NOT NULL DEFAULT 'not_started'",
@@ -181,7 +183,7 @@ def _document(row: Mapping) -> dict:
     document = {key: row[key] for key in (
         "id", "title", "grade", "unit", "description", "filename", "stored_name", "file_type",
         "size_bytes", "parsing_status", "parse_error", "parsed_path", "current_task_id",
-        "created_at", "updated_at",
+        "created_at", "updated_at", "subject", "published_at",
     )}
     document["steps"] = json.loads(row["steps"]) if isinstance(row["steps"], str) else row["steps"]
     return document
@@ -223,15 +225,16 @@ def get_stored_path(document_id: str) -> Path | None:
 
 
 def create_document(document_id: str, title: str, grade: str, unit: str, description: str,
-                    filename: str, stored_name: str, file_type: str, size_bytes: int) -> dict:
+                    filename: str, stored_name: str, file_type: str, size_bytes: int,
+                    *, subject: str = "english") -> dict:
     now, task_id = _now(), uuid4().hex
     with connect() as connection:
         connection.execute(
             """INSERT INTO documents
-            (id,title,grade,unit,description,filename,stored_name,file_type,size_bytes,parsing_status,current_task_id,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (id,title,grade,unit,description,filename,stored_name,file_type,size_bytes,parsing_status,current_task_id,created_at,updated_at,subject)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (document_id,title,grade,unit,description,filename,stored_name,file_type,size_bytes,
-             ParseStepStatus.SOURCE_SAVED.value,task_id,now,now),
+             ParseStepStatus.SOURCE_SAVED.value,task_id,now,now,subject),
         )
         connection.execute(
             "INSERT INTO parse_tasks (id,document_id,status,created_at) VALUES (?,?,?,?)",
@@ -245,25 +248,39 @@ def create_document(document_id: str, title: str, grade: str, unit: str, descrip
 
 
 def update_document(document_id: str, title: str, grade: str, unit: str, description: str,
-                    replacement: tuple[str, str, str, int] | None = None) -> dict | None:
+                    replacement: tuple[str, str, str, int] | None = None,
+                    *, subject: str | None = None) -> dict | None:
     now = _now()
     with connect() as connection:
         if replacement:
             filename, stored_name, file_type, size_bytes = replacement
             result = connection.execute(
                 """UPDATE documents SET title=?,grade=?,unit=?,description=?,filename=?,stored_name=?,file_type=?,size_bytes=?,
-                parsing_status=?,parse_error=NULL,parsed_path=NULL,updated_at=? WHERE id=?""",
+                parsing_status=?,parse_error=NULL,parsed_path=NULL,published_at=NULL,
+                subject=COALESCE(?,subject),updated_at=? WHERE id=?""",
                 (title,grade,unit,description,filename,stored_name,file_type,size_bytes,
-                 ParseStepStatus.SOURCE_SAVED.value,now,document_id),
+                 ParseStepStatus.SOURCE_SAVED.value,subject,now,document_id),
             )
         else:
             result = connection.execute(
-                "UPDATE documents SET title=?,grade=?,unit=?,description=?,updated_at=? WHERE id=?",
-                (title,grade,unit,description,now,document_id),
+                """UPDATE documents SET title=?,grade=?,unit=?,description=?,
+                published_at=CASE WHEN subject<>COALESCE(?,subject) THEN NULL ELSE published_at END,
+                subject=COALESCE(?,subject),updated_at=? WHERE id=?""",
+                (title,grade,unit,description,subject,subject,now,document_id),
             )
         if result.rowcount == 0:
             return None
     return get_document(document_id)
+
+
+def set_publication(document_id: str, published: bool) -> bool:
+    now = _now()
+    with connect() as connection:
+        result = connection.execute(
+            "UPDATE documents SET published_at=?,updated_at=? WHERE id=?",
+            (now if published else None, now, document_id),
+        )
+        return result.rowcount == 1
 
 
 def delete_document(document_id: str) -> tuple[Path, Path | None] | None:

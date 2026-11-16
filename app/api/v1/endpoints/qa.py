@@ -1,8 +1,9 @@
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, StringConstraints, model_validator
+from app.core.auth import SUBJECTS, SUBJECT_MEMBERSHIPS, current_role, require_subject
 
 from app.rag.generation.chat import chat_json
 from app.rag.generation.intents import INTENTS, routing_instructions
@@ -13,6 +14,7 @@ router = APIRouter(prefix="/qa")
 
 
 class Question(BaseModel):
+    subject: str = "english"
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
     grade: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)]
     unit_start: int = Field(ge=1, le=20)
@@ -27,11 +29,21 @@ class Question(BaseModel):
 
 
 @router.get("/scopes")
-def scopes() -> dict[str, list[int]]:
-    return available_scopes()
+def scopes(request: Request, subject: str = "english") -> dict[str, list[int]]:
+    role = current_role(request)
+    require_subject(role, subject)
+    return available_scopes(subject, role == "teacher")
 
 
-def search_question(body: Question) -> tuple[list[dict], str]:
+@router.get("/subjects")
+def subjects(request: Request) -> dict[str, str]:
+    allowed = SUBJECT_MEMBERSHIPS.get(current_role(request), ())
+    return {key: label for key, label in SUBJECTS.items() if key in allowed}
+
+
+def search_question(body: Question, request: Request) -> tuple[list[dict], str]:
+    role = current_role(request)
+    require_subject(role, body.subject)
     rewrite = ""
     jev_intent = classify_intent(body.question)
     intent = jev_intent or "general_qa"
@@ -52,20 +64,21 @@ def search_question(body: Question) -> tuple[list[dict], str]:
     except RuntimeError:
         pass
     try:
-        return retrieve(body.question, body.grade, body.unit_start, body.unit_end, body.top_k, rewrite), intent
+        return retrieve(body.question, body.grade, body.unit_start, body.unit_end, body.top_k, rewrite,
+                        subject=body.subject, include_drafts=role == "teacher"), intent
     except (RuntimeError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "检索服务暂不可用，请检查 Embedding 和 Milvus") from exc
 
 
 @router.post("/search")
-def search(body: Question) -> dict:
-    sources, intent = search_question(body)
+def search(body: Question, request: Request) -> dict:
+    sources, intent = search_question(body, request)
     return {"sources": sources, "intent": intent}
 
 
 @router.post("/ask")
-def ask(body: Question) -> dict:
-    sources, intent = search_question(body)
+def ask(body: Question, request: Request) -> dict:
+    sources, intent = search_question(body, request)
     insufficient = {"answer": "所选年级和单元的资料中找不到足够依据。", "sources": [], "intent": intent}
     if not sources:
         return insufficient
