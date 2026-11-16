@@ -3,7 +3,13 @@ __pycache__/
 *.py[cod]
 .env
 .venv/
-data/
+data/*
+!data/references/
+data/references/*
+!data/references/grade9-unit5/
+data/references/grade9-unit5/*
+!data/references/grade9-unit5/九上U5（学案）讲义.docx
+!data/references/grade9-unit5/九上U5（教案）讲义.docx
 .idea/
 .mineru-service.lock
 sources/*.pdf
