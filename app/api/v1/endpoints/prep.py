@@ -1,4 +1,6 @@
+from copy import deepcopy
 from io import BytesIO
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import quote
 
@@ -22,20 +24,43 @@ class WordExport(BaseModel):
 
 @router.post("/export/docx")
 def export_docx(body: WordExport) -> Response:
-    document = Document()
+    variant = "学案" if body.version == "student" else "教案"
+    template = Path(__file__).resolve().parents[4] / "data" / "references" / "grade9-unit5" / f"九上U5（{variant}）讲义.docx"
+    document = Document(template)
+    table = document.tables[0]
+    fields = {"topic": [], "goals": [], "focus": [], "content": []}
+    section = "topic"
     for line in body.content.splitlines():
         # XML 1.0 excludes control characters other than tabs and newlines.
         line = "".join(char for char in line if char == "\t" or 32 <= ord(char) <= 0xD7FF
                        or 0xE000 <= ord(char) <= 0xFFFD or ord(char) >= 0x10000)
         if not line.strip():
             continue
-        if line.startswith(("# ", "## ", "### ")):
-            marker, _, title = line.partition(" ")
-            document.add_heading(title, level=len(marker) - 1)
-        elif line.startswith("- "):
-            document.add_paragraph(line[2:], style="List Bullet")
-        else:
-            document.add_paragraph(line)
+        if line in {"## 教学目标", "## 教学重难点"}:
+            section = "goals" if line == "## 教学目标" else "focus"
+            continue
+        if line == "## 练习":
+            section = "content"
+        fields[section].append(line.removeprefix("### ").removeprefix("## ").removeprefix("# ").removeprefix("- "))
+
+    for cell, lines, repeat_style in (
+        (table.cell(1, 1), fields["topic"], False),
+        (table.cell(2, 1), fields["goals"], False),
+        (table.cell(3, 1), fields["focus"], False),
+        (table.cell(5, 0), fields["content"], True),
+    ):
+        originals = cell.paragraphs
+        styles = [p for p in originals if p.text.strip()] or originals
+        for index, line in enumerate(lines or [""]):
+            sample = styles[min(index, len(styles) - 1)] if not repeat_style else styles[0]
+            paragraph = cell.add_paragraph()
+            if sample._p.pPr is not None:
+                paragraph._p.append(deepcopy(sample._p.pPr))
+            run = paragraph.add_run(line)
+            if sample.runs and sample.runs[0]._r.rPr is not None:
+                run._r.append(deepcopy(sample.runs[0]._r.rPr))
+        for paragraph in originals:
+            paragraph._p.getparent().remove(paragraph._p)
     output = BytesIO()
     document.save(output)
     name = "学生学案.docx" if body.version == "student" else "教师教案.docx"
