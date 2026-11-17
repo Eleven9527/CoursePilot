@@ -18,6 +18,11 @@ def initialize_database() -> None:
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.parsed_dir.mkdir(parents=True, exist_ok=True)
     with connect() as connection:
+        connection.execute("""CREATE TABLE IF NOT EXISTS prep_jobs (
+            id TEXT PRIMARY KEY, subject TEXT NOT NULL, grade TEXT NOT NULL,
+            unit_start INTEGER NOT NULL, unit_end INTEGER NOT NULL,
+            status TEXT NOT NULL, stage TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL
+        )""")
         connection.execute("""CREATE TABLE IF NOT EXISTS prep_drafts (
             id TEXT PRIMARY KEY, subject TEXT NOT NULL, grade TEXT NOT NULL,
             unit_start INTEGER NOT NULL, unit_end INTEGER NOT NULL,

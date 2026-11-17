@@ -12,6 +12,7 @@ from app.core import database
 from app.main import app
 from app.services import document_service
 from app.services import prep_workflow
+from app.services import prep_worker
 
 API = "/api/v1/prep"
 SCOPE = {"subject": "english", "grade": "初三", "unit_start": 5, "unit_end": 5}
@@ -132,4 +133,35 @@ def test_content_review_retries_and_blocks_failed_draft(client_factory):
     assert response.status_code == 502
     assert issue in response.json()["detail"]
     assert prep.chat_json.call_args_list[2].args[1]["validation_errors"] == [issue]
+    assert teacher.get(f"{API}/drafts").json() == []
+
+
+def test_async_job_reuses_request_id_and_saves_one_draft(client_factory):
+    teacher = client_factory("teacher")
+    job_id = "a" * 32
+    url = f"{API}/jobs"
+    for _ in range(2):
+        response = teacher.post(url, params={"request_id": job_id}, json=SCOPE)
+        assert response.status_code == 202 and response.json()["id"] == job_id
+    assert prep.chat_json.call_count == 0
+    with database.connect() as connection:
+        connection.execute("UPDATE prep_jobs SET status='running' WHERE id=?", (job_id,))
+    prep_worker.recover_jobs()
+    assert prep_worker.process_job()
+    assert not prep_worker.process_job()
+    assert teacher.get(f"{url}/{job_id}").json()["status"] == "succeeded"
+    assert [draft["id"] for draft in teacher.get(f"{API}/drafts").json()] == [job_id]
+    student = client_factory("student")
+    assert student.get(f"{url}/{job_id}").status_code == 403
+
+
+def test_async_job_reports_review_failure(client_factory):
+    teacher = client_factory("teacher")
+    prep.chat_json.side_effect = [MODEL_DRAFT, {"issues": ["unsupported"]}] * 2
+    job_id = "b" * 32
+    assert teacher.post(f"{API}/jobs", params={"request_id": job_id}, json=SCOPE).status_code == 202
+    assert prep_worker.process_job()
+    job = teacher.get(f"{API}/jobs/{job_id}").json()
+    assert (job["status"], job["stage"]) == ("failed", "review")
+    assert "unsupported" in job["error"]
     assert teacher.get(f"{API}/drafts").json() == []

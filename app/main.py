@@ -18,6 +18,7 @@ from app.services.document_service import (
     initialize_database, migrate_chunk_files, queue_existing_embeddings, recover_interrupted_steps,
 )
 from app.services.worker_service import run_worker
+from app.services.prep_worker import recover_jobs, run_prep_worker
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ async def lifespan(_: FastAPI):
             embedding_ready = False
             logging.getLogger(__name__).warning("Milvus 连接失败，本次启动暂停向量化 Worker：%s", exc)
     initialize_database()
+    recover_jobs()
     migrate_chunk_files()
     recover_interrupted_steps()
     step_keys = [ParseStepKey.MINERU_PARSE, ParseStepKey.CHUNKING]
@@ -46,6 +48,7 @@ async def lifespan(_: FastAPI):
         )
         for step_key in step_keys
     ]
+    workers.append(Thread(target=run_prep_worker, args=(stop_event,), name="prep-worker", daemon=True))
     for worker in workers:
         worker.start()
     try:

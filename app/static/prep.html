@@ -69,6 +69,7 @@
         </ul>
       </div>
       <p v-if="status" class="notice" role="status">{{ status }}</p>
+      <p v-if="jobProgress" class="notice" role="status">{{ jobProgress }}</p>
       <p v-if="generationError" class="notice" role="alert">{{ generationError }}</p>
       <button class="primary" :disabled="busy || reviewing || !lessonScope" @click="generate">{{ busy ? '正在生成…' : '生成讲义' }}</button>
     </section>
@@ -130,7 +131,7 @@
   Vue.createApp({
     data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
                   status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
-                  version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '',
+                  version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '', jobProgress: '',
                   savedId: '', saveMessage: '', reviewedAt: null, rejectedAt: null, draftScope: null, reviewing: false, drafts: [], draftListError: '', audit: [], auditError: '', showAllAudit: false, auditRequest: 0}),
     computed: {
       units() { return this.scopes[this.grade] || []; },
@@ -149,6 +150,7 @@
       start() { if (!this.endUnits.includes(this.end)) this.end = this.start; },
     },
     async mounted() {
+      this.resumeJob();
       this.loadDrafts();
       this.loadAudit();
       try {
@@ -248,13 +250,63 @@
           this.loadAudit();
         }
       },
-      async generateFor(scope) {
-        const response = await fetch(root.dataset.apiPrefix + '/prep/generate', {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(scope),
-        });
+      async jobRequest(path, options) {
+        const response = await fetch(root.dataset.apiPrefix + '/prep/jobs' + path, options);
         const data = await response.json();
-        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '生成失败');
+        if (!response.ok) {
+          const error = new Error(typeof data.detail === 'string' ? data.detail : '讲义任务请求失败');
+          error.status = response.status;
+          throw error;
+        }
         return data;
+      },
+      async waitForJob(id) {
+        const stages = {queued: '排队中', retrieval: '正在检索资料', generation: '正在生成讲义',
+                        review: '正在审校', saving: '正在保存草稿', saved: '草稿已保存'};
+        while (true) {
+          const task = await this.jobRequest('/' + id);
+          this.jobProgress = '任务 ' + id.slice(0, 8) + ' · ' + (stages[task.stage] || task.stage);
+          if (task.status === 'succeeded' || task.status === 'failed') {
+            localStorage.removeItem('coursepilot.prepJob');
+            this.jobProgress = '';
+            if (task.status === 'failed') throw new Error((stages[task.stage] || task.stage) + '失败：' + task.error);
+            const draft = await this.draftRequest('/' + id);
+            return {...draft, sources: []};
+          }
+          await new Promise(resolve => setTimeout(resolve, 1200));
+        }
+      },
+      async resumeJob() {
+        const saved = localStorage.getItem('coursepilot.prepJob');
+        if (!saved) return;
+        this.busy = true;
+        try {
+          const job = JSON.parse(saved);
+          const draft = await this.generateFor(job.scope, job.id);
+          this.draft = draft;
+          this.savedId = draft.id;
+          this.draftScope = job.scope;
+          this.rejectedAt = draft.rejected_at;
+          this.reviewedAt = draft.reviewed_at;
+        } catch (error) {
+          this.generationError = error.message;
+        } finally {
+          this.busy = false;
+          this.loadDrafts();
+          this.loadAudit();
+        }
+      },
+      async generateFor(scope, id = crypto.randomUUID().replaceAll('-', '')) {
+        localStorage.setItem('coursepilot.prepJob', JSON.stringify({id, scope}));
+        try {
+          await this.jobRequest('?request_id=' + id, {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(scope),
+          });
+          return await this.waitForJob(id);
+        } catch (error) {
+          if (error.status >= 400 && error.status < 500) localStorage.removeItem('coursepilot.prepJob');
+          throw error;
+        }
       },
       async generate() {
         if (this.busy || this.reviewing || !this.lessonScope) return;
