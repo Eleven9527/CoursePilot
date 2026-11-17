@@ -297,6 +297,21 @@ def get_job(job_id: str, request: Request) -> dict:
     return dict(row)
 
 
+@router.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_teacher)])
+def cancel_job(job_id: str, request: Request) -> dict:
+    job = get_job(job_id, request)
+    authorize_tool(request, job["subject"], "cancel_teaching_handout")
+    with connect() as connection:
+        begin_write(connection)
+        row = connection.execute(
+            """UPDATE prep_jobs SET status='cancelled',stage='cancelled'
+            WHERE id=? AND status IN ('queued','cancelled') RETURNING *""", (job_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(409, "任务已开始或结束，无法取消")
+    return dict(row)
+
+
 @router.post("/jobs/{job_id}/retry", status_code=202, dependencies=[Depends(require_teacher)])
 def retry_job(job_id: str, request: Request) -> dict:
     job = get_job(job_id, request)

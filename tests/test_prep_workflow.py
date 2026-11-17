@@ -179,3 +179,18 @@ def test_async_job_reports_review_failure(client_factory):
     assert prep_worker.process_job()
     assert returning_teacher.get(f"{API}/jobs").json()[0]["status"] == "succeeded"
     assert [draft["id"] for draft in teacher.get(f"{API}/drafts").json()] == [job_id]
+
+
+def test_cancelled_job_is_not_claimed(client_factory):
+    teacher = client_factory("teacher")
+    student = client_factory("student")
+    job_id = "c" * 32
+    assert teacher.post(f"{API}/jobs", params={"request_id": job_id}, json=SCOPE).status_code == 202
+    url = f"{API}/jobs/{job_id}"
+    assert student.post(f"{url}/cancel").status_code == 403
+    for _ in range(2):
+        response = teacher.post(f"{url}/cancel")
+        assert response.status_code == 200 and response.json()["status"] == "cancelled"
+    assert not prep_worker.process_job()
+    assert teacher.get(url).json()["status"] == "cancelled"
+    prep.chat_json.assert_not_called()

@@ -121,7 +121,8 @@
           <p v-if="job.error">{{ job.error }}</p>
           <button v-if="job.status === 'failed'" type="button" :disabled="busy || reviewing" @click="trackJob(job, true)">重试</button>
           <button v-else-if="job.status === 'succeeded'" type="button" :disabled="busy || reviewing" @click="openDraft(job.id)">打开草稿</button>
-          <button v-else type="button" :disabled="busy || reviewing" @click="trackJob(job)">跟踪进度</button>
+          <button v-else-if="job.status === 'queued' || job.status === 'running'" type="button" :disabled="busy || reviewing" @click="trackJob(job)">跟踪进度</button>
+          <button v-if="job.status === 'queued'" type="button" :disabled="cancelling === job.id" @click="cancelJob(job.id)">取消任务</button>
         </li>
       </ul>
     </section>
@@ -148,7 +149,7 @@
     data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
                   status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
                   version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '', jobProgress: '',
-                  jobs: [], jobListError: '',
+                  jobs: [], jobListError: '', cancelling: '',
                   savedId: '', saveMessage: '', reviewedAt: null, rejectedAt: null, draftScope: null, reviewing: false, drafts: [], draftListError: '', audit: [], auditError: '', showAllAudit: false, auditRequest: 0}),
     computed: {
       units() { return this.scopes[this.grade] || []; },
@@ -280,7 +281,7 @@
       },
       stageLabel(stage) {
         const stages = {queued: '排队中', retrieval: '正在检索资料', generation: '正在生成讲义',
-                        review: '正在审校', saving: '正在保存草稿', saved: '草稿已保存'};
+                        review: '正在审校', saving: '正在保存草稿', saved: '草稿已保存', cancelled: '已取消'};
         return stages[stage] || stage;
       },
       async loadJobs() {
@@ -289,6 +290,20 @@
           this.jobListError = '';
         } catch (error) {
           this.jobListError = error.message;
+        }
+      },
+      async cancelJob(id) {
+        if (this.cancelling) return;
+        this.cancelling = id;
+        let failure = '';
+        try {
+          await this.jobRequest('/' + id + '/cancel', {method: 'POST'});
+        } catch (error) {
+          failure = error.message;
+        } finally {
+          await this.loadJobs();
+          if (failure) this.jobListError = failure;
+          this.cancelling = '';
         }
       },
       async trackJob(job, retry = false) {
@@ -316,10 +331,14 @@
       async waitForJob(id) {
         while (true) {
           const task = await this.jobRequest('/' + id);
+          const index = this.jobs.findIndex(job => job.id === id);
+          if (index === -1) this.jobs.unshift(task);
+          else this.jobs[index] = task;
           this.jobProgress = '任务 ' + id.slice(0, 8) + ' · ' + this.stageLabel(task.stage);
-          if (task.status === 'succeeded' || task.status === 'failed') {
+          if (['succeeded', 'failed', 'cancelled'].includes(task.status)) {
             localStorage.removeItem('coursepilot.prepJob');
             this.jobProgress = '';
+            if (task.status === 'cancelled') throw new Error('讲义任务已取消。');
             if (task.status === 'failed') throw new Error(this.stageLabel(task.stage) + '失败：' + task.error);
             const draft = await this.draftRequest('/' + id);
             return {...draft, sources: []};
