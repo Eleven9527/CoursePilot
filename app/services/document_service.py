@@ -23,6 +23,19 @@ def initialize_database() -> None:
             unit_start INTEGER NOT NULL, unit_end INTEGER NOT NULL,
             status TEXT NOT NULL, stage TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL
         )""")
+        job_columns = (
+            {row["name"] for row in connection.execute("PRAGMA table_info(prep_jobs)")}
+            if not settings.database_url else set()
+        )
+        for column, definition in (
+            ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("queued_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
+            ("previous_error", "TEXT"), ("previous_error_stage", "TEXT"),
+        ):
+            if settings.database_url:
+                connection.execute(f"ALTER TABLE prep_jobs ADD COLUMN IF NOT EXISTS {column} {definition}")
+            elif column not in job_columns:
+                connection.execute(f"ALTER TABLE prep_jobs ADD COLUMN {column} {definition}")
         connection.execute("""CREATE TABLE IF NOT EXISTS prep_drafts (
             id TEXT PRIMARY KEY, subject TEXT NOT NULL, grade TEXT NOT NULL,
             unit_start INTEGER NOT NULL, unit_end INTEGER NOT NULL,

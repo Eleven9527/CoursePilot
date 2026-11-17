@@ -156,9 +156,18 @@ def save_draft(body: DraftSave, request: Request) -> dict[str, str]:
     return {"id": draft_id}
 
 
+class JobCancelled(Exception):
+    pass
+
+
 def persist_draft(body: DraftSave, draft_id: str, *, queued: bool = False) -> None:
-    review_checkpoint(draft_id)
     with connect() as connection:
+        if queued:
+            begin_write(connection)
+            job = connection.execute("SELECT status FROM prep_jobs WHERE id=?", (draft_id,)).fetchone()
+            if job is None or job["status"] != "running":
+                raise JobCancelled()
+        review_checkpoint(draft_id)
         connection.execute(
             """INSERT INTO prep_drafts (id,subject,grade,unit_start,unit_end,student,teacher)
             VALUES (?,?,?,?,?,?,?)""",
@@ -166,7 +175,8 @@ def persist_draft(body: DraftSave, draft_id: str, *, queued: bool = False) -> No
         )
         if queued:
             connection.execute(
-                "UPDATE prep_jobs SET status='succeeded',stage='saved',error=NULL WHERE id=?", (draft_id,),
+                "UPDATE prep_jobs SET status='succeeded',stage='saved',error=NULL,finished_at=? WHERE id=?",
+                (datetime.now(timezone.utc).isoformat(), draft_id),
             )
 
 
@@ -304,11 +314,12 @@ def cancel_job(job_id: str, request: Request) -> dict:
     with connect() as connection:
         begin_write(connection)
         row = connection.execute(
-            """UPDATE prep_jobs SET status='cancelled',stage='cancelled'
-            WHERE id=? AND status IN ('queued','cancelled') RETURNING *""", (job_id,),
+            """UPDATE prep_jobs SET status='cancelled',stage='cancelled',finished_at=COALESCE(finished_at,?)
+            WHERE id=? AND status IN ('queued','running','cancelled') RETURNING *""",
+            (datetime.now(timezone.utc).isoformat(), job_id),
         ).fetchone()
         if row is None:
-            raise HTTPException(409, "任务已开始或结束，无法取消")
+            raise HTTPException(409, "任务已结束，无法取消")
     return dict(row)
 
 
@@ -318,8 +329,10 @@ def retry_job(job_id: str, request: Request) -> dict:
     authorize_tool(request, job["subject"], "retry_teaching_handout")
     with connect() as connection:
         row = connection.execute(
-            """UPDATE prep_jobs SET status='queued',stage='queued',error=NULL
-            WHERE id=? AND status='failed' RETURNING *""", (job_id,),
+            """UPDATE prep_jobs SET previous_error=error,previous_error_stage=stage,
+            status='queued',stage='queued',error=NULL,
+            queued_at=?,started_at=NULL,finished_at=NULL WHERE id=? AND status='failed' RETURNING *""",
+            (datetime.now(timezone.utc).isoformat(), job_id),
         ).fetchone()
         if row is None:
             raise HTTPException(409, "只能重试失败的讲义任务")

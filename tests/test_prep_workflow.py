@@ -174,10 +174,14 @@ def test_async_job_reports_review_failure(client_factory):
     response = returning_teacher.post(retry)
     assert response.status_code == 202
     assert response.json()["id"] == job_id and response.json()["error"] is None
+    assert response.json()["previous_error"] == job["error"]
+    assert response.json()["previous_error_stage"] == "review"
     assert returning_teacher.post(retry).status_code == 409
     prep.chat_json.side_effect = [MODEL_DRAFT, {"issues": []}]
     assert prep_worker.process_job()
-    assert returning_teacher.get(f"{API}/jobs").json()[0]["status"] == "succeeded"
+    completed = returning_teacher.get(f"{API}/jobs").json()[0]
+    assert completed["status"] == "succeeded"
+    assert completed["previous_error"] == job["error"]
     assert [draft["id"] for draft in teacher.get(f"{API}/drafts").json()] == [job_id]
 
 
@@ -194,3 +198,23 @@ def test_cancelled_job_is_not_claimed(client_factory):
     assert not prep_worker.process_job()
     assert teacher.get(url).json()["status"] == "cancelled"
     prep.chat_json.assert_not_called()
+
+
+def test_cancel_running_job_during_review(client_factory):
+    teacher = client_factory("teacher")
+    job_id = "d" * 32
+    assert teacher.post(f"{API}/jobs", params={"request_id": job_id}, json=SCOPE).status_code == 202
+    url = f"{API}/jobs/{job_id}"
+
+    def review_then_cancel(_, payload):
+        if "scope" in payload:
+            return MODEL_DRAFT
+        assert teacher.get(url).json()["stage"] == "review"
+        assert teacher.post(f"{url}/cancel").status_code == 200
+        return {"issues": []}
+
+    prep.chat_json.side_effect = review_then_cancel
+    assert prep_worker.process_job()
+    assert teacher.get(url).json()["status"] == "cancelled"
+    assert teacher.get(f"{API}/drafts").json() == []
+    assert prep.chat_json.call_count == 2

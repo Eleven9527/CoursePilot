@@ -119,10 +119,19 @@
           {{ subjects[job.subject] || job.subject }} · {{ job.grade }} · {{ job.unit_start }}–{{ job.unit_end }} 单元
           · {{ job.status === 'failed' ? '失败 · ' + stageLabel(job.stage) : stageLabel(job.stage) }}
           <p v-if="job.error">{{ job.error }}</p>
+          <details v-if="job.previous_error">
+            <summary>上一次失败 · {{ stageLabel(job.previous_error_stage) }}</summary>
+            <p>{{ job.previous_error }}</p>
+          </details>
+          <div class="notice">
+            执行 {{ job.attempts }} 次
+            <span v-if="job.started_at"> · 排队 {{ elapsed(job.queued_at || job.created_at, job.started_at) }}</span>
+            <span v-if="job.started_at && job.finished_at"> · 运行 {{ elapsed(job.started_at, job.finished_at) }}</span>
+          </div>
           <button v-if="job.status === 'failed'" type="button" :disabled="busy || reviewing" @click="trackJob(job, true)">重试</button>
           <button v-else-if="job.status === 'succeeded'" type="button" :disabled="busy || reviewing" @click="openDraft(job.id)">打开草稿</button>
           <button v-else-if="job.status === 'queued' || job.status === 'running'" type="button" :disabled="busy || reviewing" @click="trackJob(job)">跟踪进度</button>
-          <button v-if="job.status === 'queued'" type="button" :disabled="cancelling === job.id" @click="cancelJob(job.id)">取消任务</button>
+          <button v-if="job.status === 'queued' || job.status === 'running'" type="button" :disabled="cancelling === job.id" @click="cancelJob(job.id)">取消任务</button>
         </li>
       </ul>
     </section>
@@ -278,6 +287,9 @@
           throw error;
         }
         return data;
+      },
+      elapsed(start, end) {
+        return (Math.max(0, Date.parse(end) - Date.parse(start)) / 1000).toFixed(1) + ' 秒';
       },
       stageLabel(stage) {
         const stages = {queued: '排队中', retrieval: '正在检索资料', generation: '正在生成讲义',
