@@ -164,31 +164,36 @@ Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集�
 
 每次上传或重试都会保留解析任务和步骤状态；流程依次执行 MinerU 结构解析和文本切分。文档列表分别显示原文件、MinerU 解析和文本切分的状态。源文件、MinerU 日志、Markdown 解析结果保存在 `data/`。切分会尽量沿 Markdown 标题和段落边界进行，并按 `CHUNK_SIZE` 控制长度、按 `CHUNK_OVERLAP` 保留相邻块的上下文。在管理页点击“校验”后，可分别打开“MinerU 解析校验”（原始文档对照解析文本）和“文本切分校验”（解析文本对照切分块），检查各阶段的结果以及年级、单元等元数据。DOCX 源文件会转换成网页预览，支持查看文字、标题和表格；需要核对 Word 原始版式时，可点击“下载原始文件”。替换文件会开启新的解析任务；历史任务步骤记录保留在当前配置的数据库中。
 
+## 测试与评测速查
+
+在项目根目录运行。离线测试先安装 `requirements-dev.txt`。
+
+| Makefile 目标 | 用途 | 运行条件 |
+| --- | --- | --- |
+| `make test-permissions` | 检查科目授权、召回范围和引用隔离 | 开发依赖 |
+| `make test-prep` | 检查讲义自动保存、审批恢复、导出和越权拦截 | 开发依赖 |
+| `make eval-validate` | 核对评测题的依据是否存在于当前切分块中 | 已导入评测资料 |
+| `make eval-retrieval` | 测纯向量检索的 Top K 命中率 | 评测资料已向量化，Embedding 和 Milvus 可用 |
+| `make eval-qa` | 测混合检索、意图和回答引用 | CoursePilot 已启动，评测资料已发布，对话模型可用 |
+| `make eval-prep-review` | 测讲义审校能否识别错误 | 对话模型可用，会调用真实接口 |
+
+PowerShell 没有 GNU Make 时，可直接运行对应命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q tests/test_qa_permissions.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_prep_workflow.py
+.\.venv\Scripts\python.exe -m evals.retrieval --validate-only
+.\.venv\Scripts\python.exe -m evals.retrieval --top-k 5
+.\.venv\Scripts\python.exe -m evals.qa --top-k 5
+.\.venv\Scripts\python.exe -m evals.prep_review
+```
+
+权限和讲义回归测试使用临时 SQLite 与模拟服务。问答和讲义审校评测的报告分别写入 `data/qa-eval.json` 和 `data/prep-review-eval.json`。检索和问答评测默认取前 5 条，可用 `TOP_K` 或 `--top-k` 调整。
+
 ## 检索评测
 
 从项目根目录运行。评测数据位于 `evals/units_1_2.json`。数据库里需要有该 DOCX 的当前切分结果，完整评测还需要使用当前 Embedding 配置完成向量入库，并启动 Milvus。
-
-装有 GNU Make 时，Windows 和 macOS 都可以从项目根目录运行：
-
-```sh
-make eval-validate
-make eval-retrieval
-make eval-retrieval TOP_K=10
-```
-
-Windows PowerShell 也可以直接运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m evals.retrieval --validate-only
-.\.venv\Scripts\python.exe -m evals.retrieval --top-k 5
-```
-
-macOS
-
-```bash
-.venv/bin/python -m evals.retrieval --validate-only
-.venv/bin/python -m evals.retrieval --top-k 5
-```
 
 `--validate-only` 只从数据库核对依据文本。完整评测会调用 Embedding 和 Milvus，不需要启动 CoursePilot API。输出包含每题的命中块 ID 以及完整命中题数。Q08 要求两处依据都出现在结果中。Q09 和 Q10 留给后续的回答评测。
 
@@ -208,12 +213,6 @@ macOS
 - 对 Q01–Q10 调用 `POST /api/v1/qa/ask`，对照预期答案，核对引用是否支持回答。Q09 和 Q10 检查依据不足时的表现。
 - `make eval-retrieval` 跑纯向量检索基线。问答接口还包含范围过滤、查询改写、关键词召回和结果融合，验收时单独记录它的结果。
 
-使用 `make eval-qa` 批量验收运行中的问答服务，或在 Windows PowerShell 执行：
-
-```powershell
-.\.venv\Scripts\python.exe -m evals.qa --top-k 5
-```
-
 自动检查包括 Top K 依据命中、回答引用是否覆盖依据，以及无依据题是否返回空引用。报告默认写到 `data/qa-eval.json`，其中的答案和引用需要人工核对。退出码为 1 表示至少有一条自动检查失败。
 
 意图识别与检索改写共用一次模型调用。`/qa/search` 和 `/qa/ask` 返回 `intent`，便于查看路由结果。新增意图时，在 `app/rag/generation/intents.py` 的 `INTENTS` 中添加识别条件和回答规则。识别失败时使用通用问答。
@@ -224,20 +223,7 @@ macOS
 
 启动项目后打开 `http://127.0.0.1:8000/login`。下拉框可选教师或学生，两个账号的密码都是 `123`。教师进入资料管理，也可以使用课程问答。学生进入课程问答，访问资料管理 API 会被拒绝。应用重启后需要重新登录。`make eval-qa` 会自动用学生账号登录。演示账号面向本机开发环境。
 
-## 课程权限测试
-
-安装开发依赖后，在项目根目录执行 `make test-permissions`。
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q tests/test_qa_permissions.py
-```
-
-测试使用临时 SQLite 和合成资料，验证学生只召回已发布的英语资料、拒绝越权科目和发布请求，以及教师可以预览草稿。它模拟 Milvus 和对话模型，并检查传入模型的片段以及最终引用。无需启动 CoursePilot API 或外部服务。
-
 ## 讲义工作流测试与演示
-
-安装 `requirements-dev.txt` 后运行 `make test-prep`。PowerShell 可直接运行 `.\.venv\Scripts\python.exe -m pytest -q tests/test_prep_workflow.py`。测试使用临时 SQLite 和模拟模型响应，无需启动 Milvus 或调用付费接口。
 
 现场演示时，先启动项目并准备一份已完成向量化的资料。
 
@@ -247,13 +233,3 @@ macOS
 4. 运行 `make test-prep`，展示学生持有真实草稿 ID 时，直接调用打开、审阅、拒绝或导出接口仍返回 HTTP 403，并由教师在工具权限审计中查到拒绝记录。
 
 讲义保存后，LangGraph 使用草稿 ID 作为 `thread_id`，在人工审阅节点暂停。确认或拒绝时，服务先检查当前教师的科目权限，再恢复该草稿的检查点。检查点保存在 `DATA_DIR/prep-checkpoints.sqlite`，即使业务数据库配置为 PostgreSQL 也是如此。本地演示重启后重新登录，从草稿列表打开待审阅稿即可继续。拒绝后重新生成会创建新的草稿和检查点。
-
-### 讲义审校评测
-
-在项目根目录运行 `make eval-prep-review`。Windows PowerShell 可直接执行：
-
-```powershell
-.\.venv\Scripts\python.exe -m evals.prep_review
-```
-
-评测会调用已配置的对话模型，报告写入 `data/prep-review-eval.json`。
