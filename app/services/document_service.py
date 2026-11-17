@@ -18,6 +18,28 @@ def initialize_database() -> None:
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.parsed_dir.mkdir(parents=True, exist_ok=True)
     with connect() as connection:
+        connection.execute("""CREATE TABLE IF NOT EXISTS prep_drafts (
+            id TEXT PRIMARY KEY, subject TEXT NOT NULL, grade TEXT NOT NULL,
+            unit_start INTEGER NOT NULL, unit_end INTEGER NOT NULL,
+            student TEXT NOT NULL, teacher TEXT NOT NULL
+        )""")
+        draft_columns = (
+            {row["name"] for row in connection.execute("PRAGMA table_info(prep_drafts)")}
+            if not settings.database_url else set()
+        )
+        for column in ("reviewed_at", "rejected_at"):
+            if settings.database_url:
+                connection.execute(f"ALTER TABLE prep_drafts ADD COLUMN IF NOT EXISTS {column} TEXT")
+            elif column not in draft_columns:
+                connection.execute(f"ALTER TABLE prep_drafts ADD COLUMN {column} TEXT")
+        connection.execute("""CREATE TABLE IF NOT EXISTS prep_audit (
+            id TEXT PRIMARY KEY, created_at TEXT NOT NULL, role TEXT NOT NULL,
+            subject TEXT NOT NULL, tool TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT NOT NULL
+        )""")
+        if settings.database_url:
+            connection.execute("ALTER TABLE prep_audit ADD COLUMN IF NOT EXISTS draft_id TEXT")
+        elif not any(row["name"] == "draft_id" for row in connection.execute("PRAGMA table_info(prep_audit)")):
+            connection.execute("ALTER TABLE prep_audit ADD COLUMN draft_id TEXT")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL,

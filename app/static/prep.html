@@ -70,7 +70,7 @@
       </div>
       <p v-if="status" class="notice" role="status">{{ status }}</p>
       <p v-if="generationError" class="notice" role="alert">{{ generationError }}</p>
-      <button class="primary" :disabled="busy || !lessonScope" @click="generate">{{ busy ? '正在生成…' : '生成讲义' }}</button>
+      <button class="primary" :disabled="busy || reviewing || !lessonScope" @click="generate">{{ busy ? '正在生成…' : '生成讲义' }}</button>
     </section>
     <section v-if="draft" class="settings preview">
       <label>预览版本<select v-model="version">
@@ -81,8 +81,12 @@
         <option value="docx">Word（.docx）</option>
         <option value="md">Markdown（.md）</option>
       </select></label>
-      <button class="primary" :disabled="exporting" @click="download">{{ exporting ? '正在导出…' : '下载讲义' }}</button>
+      <button class="primary" :disabled="exporting || !reviewedAt" @click="download">{{ exporting ? '正在导出…' : '下载讲义' }}</button>
       <p v-if="exportError" class="notice" role="alert">{{ exportError }}</p>
+      <p v-if="saveMessage" class="notice" role="status">{{ saveMessage }}</p>
+      <button v-if="savedId && !reviewedAt && !rejectedAt" class="primary" :disabled="reviewing" @click="confirmReview">确认审阅</button>
+      <button v-if="savedId && !reviewedAt" class="primary" :disabled="reviewing || busy" @click="regenerate">{{ rejectedAt ? '重新生成' : '拒绝并重新生成' }}</button>
+      <p v-if="savedId" class="notice">{{ rejectedAt ? '已拒绝' : reviewedAt ? '已审阅，可以下载' : '待审阅，确认后可下载' }}</p>
       <pre>{{ draft[version] }}</pre>
       <div v-if="version === 'teacher'">
         <h2>引用资料</h2>
@@ -91,6 +95,31 @@
           <pre>{{ source.text }}</pre>
         </details>
       </div>
+    </section>
+    <section class="settings preview">
+      <h2>讲义草稿</h2>
+      <p v-if="draftListError" role="alert">{{ draftListError }}</p>
+      <p v-else-if="!drafts.length">暂无已保存草稿。</p>
+      <ul v-else>
+        <li v-for="item in drafts" :key="item.id">
+          <button type="button" :disabled="busy || reviewing" @click="openDraft(item.id)">
+            {{ subjects[item.subject] }} · {{ item.grade }} · {{ item.unit_start }}–{{ item.unit_end }} 单元 · {{ item.rejected_at ? '已拒绝' : item.reviewed_at ? '已审阅' : '待审阅' }}
+          </button>
+        </li>
+      </ul>
+    </section>
+    <section class="settings preview">
+      <h2>工具权限审计</h2>
+      <p>{{ savedId && !showAllAudit ? "当前草稿 · " + savedId : "全部草稿" }}</p>
+      <button v-if="savedId" class="primary" @click="showAllAudit = !showAllAudit; loadAudit()">{{ showAllAudit ? "查看当前草稿" : "查看全部" }}</button>
+      <button class="primary" @click="loadAudit">刷新记录</button>
+      <p v-if="auditError" role="alert">{{ auditError }}</p>
+      <ul>
+        <li v-for="(entry, index) in audit" :key="index">
+          {{ entry.role }} · {{ entry.subject }} · <code>{{ entry.tool }}</code>
+          · {{ entry.outcome === 'allowed' ? '允许' : '拒绝' }} · {{ entry.reason }}
+        </li>
+      </ul>
     </section>
   </main>
 </div>
@@ -101,7 +130,8 @@
   Vue.createApp({
     data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
                   status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
-                  version: 'student', format: 'docx', exporting: false, exportError: '', generationError: ''}),
+                  version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '',
+                  savedId: '', saveMessage: '', reviewedAt: null, rejectedAt: null, draftScope: null, reviewing: false, drafts: [], draftListError: '', audit: [], auditError: '', showAllAudit: false, auditRequest: 0}),
     computed: {
       units() { return this.scopes[this.grade] || []; },
       endUnits() { return this.units.filter(unit => unit >= this.start); },
@@ -112,12 +142,15 @@
       },
     },
     watch: {
+      savedId() { this.showAllAudit = false; this.loadAudit(); },
       lessonScope() { this.draft = null; this.generationError = ''; },
       subject: 'loadScopes',
       grade() { this.start = this.units[0] ?? null; this.end = this.start; },
       start() { if (!this.endUnits.includes(this.end)) this.end = this.start; },
     },
     async mounted() {
+      this.loadDrafts();
+      this.loadAudit();
       try {
         this.subjects = await this.request('/subjects');
         this.subject = Object.keys(this.subjects)[0] || '';
@@ -127,55 +160,140 @@
       }
     },
     methods: {
+      async draftRequest(path = '', options) {
+        const response = await fetch(root.dataset.apiPrefix + '/prep/drafts' + path, options);
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '草稿操作失败');
+        return data;
+      },
+      async loadDrafts() {
+        try {
+          this.drafts = await this.draftRequest();
+          this.draftListError = '';
+        } catch (error) {
+          this.draftListError = error.message;
+        }
+      },
+      async openDraft(id) {
+        try {
+          const data = await this.draftRequest('/' + encodeURIComponent(id));
+          this.draft = {...data, sources: []};
+          this.savedId = data.id;
+          this.reviewedAt = data.reviewed_at;
+          this.rejectedAt = data.rejected_at;
+          this.draftScope = {subject: data.subject, grade: data.grade, unit_start: data.unit_start, unit_end: data.unit_end};
+          this.version = 'student';
+          this.saveMessage = '';
+          this.exportError = '';
+        } catch (error) {
+          this.draftListError = error.message;
+        } finally {
+          this.loadAudit();
+        }
+      },
+      async confirmReview() {
+        const id = this.savedId;
+        if (!id || this.reviewing) return;
+        this.reviewing = true;
+        this.saveMessage = '';
+        try {
+          const data = await this.draftRequest('/' + encodeURIComponent(id) + '/review', {method: 'POST'});
+          if (this.savedId === id) this.reviewedAt = data.reviewed_at;
+          this.loadDrafts();
+        } catch (error) {
+          if (this.savedId === id) this.saveMessage = error.message;
+        } finally {
+          this.reviewing = false;
+          this.loadAudit();
+        }
+      },
+      async loadAudit() {
+        this.auditError = '';
+        this.audit = [];
+        const version = ++this.auditRequest;
+        const query = this.savedId && !this.showAllAudit ? '?draft_id=' + encodeURIComponent(this.savedId) : '';
+        try {
+          const response = await fetch(root.dataset.apiPrefix + '/prep/audit' + query);
+          if (!response.ok) throw new Error('读取审计记录失败');
+          const entries = await response.json();
+          if (version === this.auditRequest) this.audit = entries;
+        } catch (error) {
+          if (version === this.auditRequest) this.auditError = error.message;
+        }
+      },
+      async regenerate() {
+        if (this.reviewing || this.busy || !this.savedId || this.reviewedAt) return;
+        this.reviewing = true;
+        const id = this.savedId;
+        const scope = this.draftScope;
+        this.saveMessage = '';
+        try {
+          if (!this.rejectedAt) {
+            const state = await this.draftRequest('/' + encodeURIComponent(id) + '/reject', {method: 'POST'});
+            if (this.savedId !== id) return;
+            this.rejectedAt = state.rejected_at;
+          }
+          const draft = await this.generateFor(scope);
+          if (this.savedId !== id) return;
+          this.draft = draft;
+          this.savedId = draft.id;
+          this.rejectedAt = null;
+          this.version = 'student';
+          this.saveMessage = '已生成新稿，等待审阅。';
+        } catch (error) {
+          if (this.savedId === id) this.saveMessage = error.message;
+        } finally {
+          this.reviewing = false;
+          this.loadDrafts();
+          this.loadAudit();
+        }
+      },
+      async generateFor(scope) {
+        const response = await fetch(root.dataset.apiPrefix + '/prep/generate', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(scope),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '生成失败');
+        return data;
+      },
       async generate() {
-        if (this.busy || !this.lessonScope) return;
+        if (this.busy || this.reviewing || !this.lessonScope) return;
         this.busy = true;
         this.draft = null;
+        this.savedId = '';
+        this.reviewedAt = null;
+        this.rejectedAt = null;
+        this.saveMessage = '';
         this.generationError = '';
         const scope = this.lessonScope;
         try {
-          const response = await fetch(root.dataset.apiPrefix + '/prep/generate', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({subject: this.subject, grade: this.grade,
-                                  unit_start: this.start, unit_end: this.end}),
-          });
-          const data = await response.json();
-          if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '生成失败');
+          const draftScope = {subject: this.subject, grade: this.grade, unit_start: this.start, unit_end: this.end};
+          const data = await this.generateFor(draftScope);
           if (scope === this.lessonScope) {
+            this.draftScope = draftScope;
             this.version = 'student';
             this.draft = data;
+            this.savedId = data.id;
           }
         } catch (error) {
           if (scope === this.lessonScope) this.generationError = error.message;
         } finally {
           this.busy = false;
+          this.loadDrafts();
+          this.loadAudit();
         }
       },
       async download() {
-        if (!this.draft || this.exporting) return;
+        if (!this.savedId || !this.reviewedAt || this.exporting) return;
         this.exportError = '';
-        const {version, format} = this;
-        const references = this.version === 'teacher'
-          ? '\n\n## 引用资料\n\n' + this.draft.sources.map(source =>
-              `[${source.number}] ${source.filename} · ${source.heading || source.unit} · 文本块 ${source.chunk_index}`).join('\n')
-          : '';
-        const content = this.draft[version] + references;
+        const {version, format, savedId} = this;
         this.exporting = true;
         try {
-          let file;
-          if (format === 'docx') {
-            const response = await fetch(root.dataset.apiPrefix + '/prep/export/docx', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({version, content}),
-            });
-            if (!response.ok) throw new Error('Word 导出失败，请确认教师登录状态后重试。');
-            file = await response.blob();
-          } else {
-            file = new Blob([content], {type: 'text/markdown;charset=utf-8'});
-          }
-          const url = URL.createObjectURL(file);
+          const params = new URLSearchParams({version, format});
+          const response = await fetch(root.dataset.apiPrefix + '/prep/drafts/' +
+                                       encodeURIComponent(savedId) + '/export?' + params);
+          if (!response.ok) throw new Error('导出失败，请确认审阅和登录状态。');
+          const url = URL.createObjectURL(await response.blob());
           const link = document.createElement('a');
           link.href = url;
           link.download = (version === 'student' ? '学生学案' : '教师教案') + '.' + format;
@@ -185,6 +303,7 @@
           this.exportError = error.message;
         } finally {
           this.exporting = false;
+          this.loadAudit();
         }
       },
       async request(path) {

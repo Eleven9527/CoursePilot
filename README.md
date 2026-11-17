@@ -4,6 +4,39 @@
 
 项目业务和第一版范围见[方案草案](docs/project-proposal-v1.md)。
 
+## 架构与面试演示
+
+```mermaid
+flowchart LR
+    Upload["教师上传资料"] --> Parse["MinerU 解析"]
+    Parse --> Chunk["按标题和段落切分"]
+    Chunk --> DB[("SQLite 或 PostgreSQL<br/>文档、切分块、任务")]
+    Chunk --> Embed["Embedding Worker"]
+    Embed --> Milvus[("Milvus 向量索引")]
+    User["学生或教师"] --> Scope["身份、科目、发布状态<br/>年级和单元范围"]
+    Scope --> Search["混合召回与排序"]
+    DB --> Search
+    Milvus --> Search
+    Search --> QA["意图路由与带引用回答"]
+    Search --> Prep["生成双版本讲义"]
+    Prep --> Review["LangGraph 暂停等待审阅"]
+    Review -->|确认| Export["导出 Word 或 Markdown"]
+    Review -->|拒绝后重生成| Prep
+```
+
+### 三分钟演示
+
+准备一份已向量化且已发布的英语资料，再准备一份同年级、同单元的未发布资料。讲义演示需要启动 Milvus，并配置 Embedding 和对话模型。仓库中的九上 Unit 5 学案和教案是 Word 导出模板。演示时选择已经入库的资料范围。
+
+| 演示 | 操作 | 可核对的结果 |
+| --- | --- | --- |
+| 问答与意图路由 | 学生先问「给我一点提示」，再明确要求答案 | 页面显示本次意图。提示和直接作答使用对应的回答规则 |
+| RAG 授权 | 用教师和学生账号在相同范围内检索，或运行 `make test-permissions` | 学生只可访问已发布的英语资料。测试同时核对召回过滤、模型输入和引用 |
+| 人工审阅与恢复 | 教师生成讲义后刷新页面，从草稿列表重新打开。拒绝并重新生成，再确认审阅与导出 | 旧稿保留为已拒绝，新稿有独立检查点。确认前导出会返回 409 |
+| 越权拦截 | 运行 `make test-prep`，检查学生持有效草稿 ID 的请求 | 打开、审阅、拒绝和导出均返回 403，教师可查看拒绝审计 |
+
+`make test-permissions` 和 `make test-prep` 使用临时 SQLite 与模拟模型。需要验证真实问答表现时，准备评测集对应资料并发布，再运行 `make eval-qa`。
+
 ## 环境配置
 
 部署或本地运行前，先将项目根目录的 `.env.example` 复制为同目录下的 `.env`，再按实际环境修改配置值。请勿将包含真实密钥的 `.env` 提交到 Git。
@@ -201,3 +234,16 @@ macOS
 ```
 
 测试使用临时 SQLite 和合成资料，验证学生只召回已发布的英语资料、拒绝越权科目和发布请求，以及教师可以预览草稿。它模拟 Milvus 和对话模型，并检查传入模型的片段以及最终引用。无需启动 CoursePilot API 或外部服务。
+
+## 讲义工作流测试与演示
+
+安装 `requirements-dev.txt` 后运行 `make test-prep`。PowerShell 可直接运行 `.\.venv\Scripts\python.exe -m pytest -q tests/test_prep_workflow.py`。测试使用临时 SQLite 和模拟模型响应，无需启动 Milvus 或调用付费接口。
+
+现场演示时，先启动项目并准备一份已完成向量化的资料。
+
+1. 用教师账号登录，打开 `/prep`，选择资料对应的科目、年级和单元，点击「生成讲义」。生成后自动保存为待审阅草稿。
+2. 刷新页面，从讲义草稿列表重新打开。点击「拒绝并重新生成」，观察旧稿保留为已拒绝，新稿进入待审阅。
+3. 确认审阅新稿，切换学生学案和教师教案，分别导出 Markdown 或 Word。教师版带答案和引用。
+4. 运行 `make test-prep`，展示学生持有真实草稿 ID 时，直接调用打开、审阅、拒绝或导出接口仍返回 HTTP 403，并由教师在工具权限审计中查到拒绝记录。
+
+讲义保存后，LangGraph 使用草稿 ID 作为 `thread_id`，在人工审阅节点暂停。确认或拒绝时，服务先检查当前教师的科目权限，再恢复该草稿的检查点。检查点保存在 `DATA_DIR/prep-checkpoints.sqlite`，即使业务数据库配置为 PostgreSQL 也是如此。本地演示重启后重新登录，从草稿列表打开待审阅稿即可继续。拒绝后重新生成会创建新的草稿和检查点。
