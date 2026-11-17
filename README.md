@@ -247,3 +247,13 @@ macOS
 4. 运行 `make test-prep`，展示学生持有真实草稿 ID 时，直接调用打开、审阅、拒绝或导出接口仍返回 HTTP 403，并由教师在工具权限审计中查到拒绝记录。
 
 讲义保存后，LangGraph 使用草稿 ID 作为 `thread_id`，在人工审阅节点暂停。确认或拒绝时，服务先检查当前教师的科目权限，再恢复该草稿的检查点。检查点保存在 `DATA_DIR/prep-checkpoints.sqlite`，即使业务数据库配置为 PostgreSQL 也是如此。本地演示重启后重新登录，从草稿列表打开待审阅稿即可继续。拒绝后重新生成会创建新的草稿和检查点。
+
+### 讲义审校评测
+
+在项目根目录运行 `make eval-prep-review`。Windows PowerShell 可直接执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.prep_review
+```
+
+评测会调用已配置的对话模型，报告写入 `data/prep-review-eval.json`。

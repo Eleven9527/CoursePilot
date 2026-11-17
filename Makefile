@@ -29,3 +29,8 @@ eval-retrieval:
 # 通过运行中的 CoursePilot API 评测检索、回答引用和意图路由。
 eval-qa:
 	"$(PYTHON)" -m evals.qa --top-k $(TOP_K)
+
+.PHONY: eval-prep-review
+# 使用真实对话模型评测讲义审校，报告写入本地 data 目录。
+eval-prep-review:
+	"$(PYTHON)" -m evals.prep_review
