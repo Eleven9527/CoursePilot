@@ -165,3 +165,17 @@ def test_async_job_reports_review_failure(client_factory):
     assert (job["status"], job["stage"]) == ("failed", "review")
     assert "unsupported" in job["error"]
     assert teacher.get(f"{API}/drafts").json() == []
+    returning_teacher = client_factory("teacher")
+    assert returning_teacher.get(f"{API}/jobs").json()[0]["id"] == job_id
+    student = client_factory("student")
+    assert student.get(f"{API}/jobs").status_code == 403
+    retry = f"{API}/jobs/{job_id}/retry"
+    assert student.post(retry).status_code == 403
+    response = returning_teacher.post(retry)
+    assert response.status_code == 202
+    assert response.json()["id"] == job_id and response.json()["error"] is None
+    assert returning_teacher.post(retry).status_code == 409
+    prep.chat_json.side_effect = [MODEL_DRAFT, {"issues": []}]
+    assert prep_worker.process_job()
+    assert returning_teacher.get(f"{API}/jobs").json()[0]["status"] == "succeeded"
+    assert [draft["id"] for draft in teacher.get(f"{API}/drafts").json()] == [job_id]

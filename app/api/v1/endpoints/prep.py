@@ -272,6 +272,21 @@ def queue_job(body: LessonScope, request: Request, request_id: Annotated[str, St
     return {"id": request_id, "status": "queued", "stage": "queued"}
 
 
+@router.get("/jobs", dependencies=[Depends(require_teacher)])
+def list_jobs(request: Request) -> list[dict]:
+    allowed = sorted(SUBJECT_MEMBERSHIPS.get(current_role(request), ()))
+    if not allowed:
+        return []
+    placeholders = ",".join("?" for _ in allowed)
+    with connect() as connection:
+        rows = connection.execute(
+            f"""SELECT * FROM prep_jobs WHERE subject IN ({placeholders})
+            ORDER BY CASE WHEN status IN ('queued','running') THEN 0 ELSE 1 END,
+            created_at DESC,id DESC LIMIT 30""", allowed,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 @router.get("/jobs/{job_id}", dependencies=[Depends(require_teacher)])
 def get_job(job_id: str, request: Request) -> dict:
     with connect() as connection:
@@ -279,6 +294,20 @@ def get_job(job_id: str, request: Request) -> dict:
     if row is None:
         raise HTTPException(404, "任务不存在")
     require_subject(current_role(request), row["subject"])
+    return dict(row)
+
+
+@router.post("/jobs/{job_id}/retry", status_code=202, dependencies=[Depends(require_teacher)])
+def retry_job(job_id: str, request: Request) -> dict:
+    job = get_job(job_id, request)
+    authorize_tool(request, job["subject"], "retry_teaching_handout")
+    with connect() as connection:
+        row = connection.execute(
+            """UPDATE prep_jobs SET status='queued',stage='queued',error=NULL
+            WHERE id=? AND status='failed' RETURNING *""", (job_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(409, "只能重试失败的讲义任务")
     return dict(row)
 
 

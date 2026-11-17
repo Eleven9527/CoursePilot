@@ -110,6 +110,22 @@
       </ul>
     </section>
     <section class="settings preview">
+      <h2>讲义任务</h2>
+      <button class="primary" @click="loadJobs">刷新任务</button>
+      <p v-if="jobListError" role="alert">{{ jobListError }}</p>
+      <p v-if="!jobs.length && !jobListError">暂无生成任务。</p>
+      <ul>
+        <li v-for="job in jobs" :key="job.id">
+          {{ subjects[job.subject] || job.subject }} · {{ job.grade }} · {{ job.unit_start }}–{{ job.unit_end }} 单元
+          · {{ job.status === 'failed' ? '失败 · ' + stageLabel(job.stage) : stageLabel(job.stage) }}
+          <p v-if="job.error">{{ job.error }}</p>
+          <button v-if="job.status === 'failed'" type="button" :disabled="busy || reviewing" @click="trackJob(job, true)">重试</button>
+          <button v-else-if="job.status === 'succeeded'" type="button" :disabled="busy || reviewing" @click="openDraft(job.id)">打开草稿</button>
+          <button v-else type="button" :disabled="busy || reviewing" @click="trackJob(job)">跟踪进度</button>
+        </li>
+      </ul>
+    </section>
+    <section class="settings preview">
       <h2>工具权限审计</h2>
       <p>{{ savedId && !showAllAudit ? "当前草稿 · " + savedId : "全部草稿" }}</p>
       <button v-if="savedId" class="primary" @click="showAllAudit = !showAllAudit; loadAudit()">{{ showAllAudit ? "查看当前草稿" : "查看全部" }}</button>
@@ -132,6 +148,7 @@
     data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
                   status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
                   version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '', jobProgress: '',
+                  jobs: [], jobListError: '',
                   savedId: '', saveMessage: '', reviewedAt: null, rejectedAt: null, draftScope: null, reviewing: false, drafts: [], draftListError: '', audit: [], auditError: '', showAllAudit: false, auditRequest: 0}),
     computed: {
       units() { return this.scopes[this.grade] || []; },
@@ -151,6 +168,7 @@
     },
     async mounted() {
       this.resumeJob();
+      this.loadJobs();
       this.loadDrafts();
       this.loadAudit();
       try {
@@ -260,16 +278,49 @@
         }
         return data;
       },
-      async waitForJob(id) {
+      stageLabel(stage) {
         const stages = {queued: '排队中', retrieval: '正在检索资料', generation: '正在生成讲义',
                         review: '正在审校', saving: '正在保存草稿', saved: '草稿已保存'};
+        return stages[stage] || stage;
+      },
+      async loadJobs() {
+        try {
+          this.jobs = await this.jobRequest('');
+          this.jobListError = '';
+        } catch (error) {
+          this.jobListError = error.message;
+        }
+      },
+      async trackJob(job, retry = false) {
+        if (this.busy || this.reviewing) return;
+        this.busy = true;
+        this.jobListError = '';
+        let failure = '';
+        try {
+          if (retry) await this.jobRequest('/' + job.id + '/retry', {method: 'POST'});
+          const scope = {subject: job.subject, grade: job.grade, unit_start: job.unit_start, unit_end: job.unit_end};
+          localStorage.setItem('coursepilot.prepJob', JSON.stringify({id: job.id, scope}));
+          await this.waitForJob(job.id);
+          await this.openDraft(job.id);
+          this.loadDrafts();
+        } catch (error) {
+          failure = error.message;
+        } finally {
+          this.busy = false;
+          this.jobProgress = '';
+          await this.loadJobs();
+          if (failure) this.jobListError = failure;
+          this.loadAudit();
+        }
+      },
+      async waitForJob(id) {
         while (true) {
           const task = await this.jobRequest('/' + id);
-          this.jobProgress = '任务 ' + id.slice(0, 8) + ' · ' + (stages[task.stage] || task.stage);
+          this.jobProgress = '任务 ' + id.slice(0, 8) + ' · ' + this.stageLabel(task.stage);
           if (task.status === 'succeeded' || task.status === 'failed') {
             localStorage.removeItem('coursepilot.prepJob');
             this.jobProgress = '';
-            if (task.status === 'failed') throw new Error((stages[task.stage] || task.stage) + '失败：' + task.error);
+            if (task.status === 'failed') throw new Error(this.stageLabel(task.stage) + '失败：' + task.error);
             const draft = await this.draftRequest('/' + id);
             return {...draft, sources: []};
           }
@@ -306,6 +357,8 @@
         } catch (error) {
           if (error.status >= 400 && error.status < 500) localStorage.removeItem('coursepilot.prepJob');
           throw error;
+        } finally {
+          this.loadJobs();
         }
       },
       async generate() {
