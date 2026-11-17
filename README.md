@@ -170,8 +170,10 @@ Milvus 客户端支持创建集合、写入已有向量和相似度搜索。集�
 
 | Makefile 目标 | 用途 | 运行条件 |
 | --- | --- | --- |
+| `make test` | 运行全部本地回归测试 | 开发依赖 |
 | `make test-permissions` | 检查科目授权、召回范围和引用隔离 | 开发依赖 |
 | `make test-prep` | 检查讲义自动保存、审批恢复、导出和越权拦截 | 开发依赖 |
+| `make test-study` | 检查复习计划的访问权限、时间预算、引用和模型重试 | 开发依赖 |
 | `make eval-validate` | 核对评测题的依据是否存在于当前切分块中 | 已导入评测资料 |
 | `make eval-retrieval` | 测纯向量检索的 Top K 命中率 | 评测资料已向量化，Embedding 和 Milvus 可用 |
 | `make eval-qa` | 测混合检索、意图和回答引用 | CoursePilot 已启动，评测资料已发布，对话模型可用 |
@@ -181,8 +183,10 @@ PowerShell 没有 GNU Make 时，可直接运行对应命令：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m pytest -q tests/test_qa_permissions.py
 .\.venv\Scripts\python.exe -m pytest -q tests/test_prep_workflow.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_study_plan.py
 .\.venv\Scripts\python.exe -m evals.retrieval --validate-only
 .\.venv\Scripts\python.exe -m evals.retrieval --top-k 5
 .\.venv\Scripts\python.exe -m evals.qa --top-k 5
@@ -218,6 +222,12 @@ PowerShell 没有 GNU Make 时，可直接运行对应命令：
 意图识别与检索改写共用一次模型调用。`/qa/search` 和 `/qa/ask` 返回 `intent`，便于查看路由结果。新增意图时，在 `app/rag/generation/intents.py` 的 `INTENTS` 中添加识别条件和回答规则。识别失败时使用通用问答。
 
 可选 Jev 意图识别。在 `.env` 填写 `JEV_API_KEY` 后重启。Jev 接收用户问题和意图候选项，现有对话模型负责查询改写。Jev 请求失败或返回未知意图时，使用现有对话模型同时识别意图和改写查询。清空密钥可恢复原来的流程。通过 `/qa/search` 返回的 `intent` 对照两种配置的识别结果。
+
+## 复习规划
+
+启动项目并登录后，在侧边栏打开「复习规划」（`/study`）。选择科目、年级和起止单元，填写剩余天数（1–14 天）和每天可用时间（10–180 分钟）。生成前需准备当前账号可检索的资料，并配置问答所用的检索服务和对话模型。
+
+生成后可按天查看任务、预计用时和引用资料。勾选任务会更新总进度，开启「只看未完成」可隐藏已完成项。同一账号在原标签页刷新后可恢复最近一次成功生成的计划和勾选记录。关闭标签页后，记录随浏览器会话结束。
 
 ## 本地演示登录
 

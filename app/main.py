@@ -108,15 +108,27 @@ def vue_runtime() -> FileResponse:
                         media_type="text/javascript")
 
 
-@app.get("/qa", include_in_schema=False)
-def qa_page(request: Request):
+def student_workspace_page(request: Request, filename: str):
     if current_role(request) is None:
         return RedirectResponse("/login", status_code=303)
-    page = (Path(__file__).parent / "static" / "qa.html").read_text(encoding="utf-8")
+    page = (Path(__file__).parent / "static" / filename).read_text(encoding="utf-8")
     if current_role(request) == "student":
         page = page.replace('<a class="nav-link" href="/admin"><span aria-hidden="true">▤</span>文档管理</a>', "")
         page = page.replace('<a class="nav-link" href="/prep"><span aria-hidden="true">▧</span>讲义生成</a>', "")
-    return HTMLResponse(page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True)))
+    page = page.replace("__QA_API_PREFIX__", escape(settings.api_prefix, quote=True))
+    if filename == "study.html":
+        page = page.replace("__STUDY_ACCOUNT__", escape(request.session["account"], quote=True))
+    return HTMLResponse(page)
+
+
+@app.get("/qa", include_in_schema=False)
+def qa_page(request: Request):
+    return student_workspace_page(request, "qa.html")
+
+
+@app.get("/study", include_in_schema=False)
+def study_page(request: Request):
+    return student_workspace_page(request, "study.html")
 
 
 @app.get("/prep", include_in_schema=False)

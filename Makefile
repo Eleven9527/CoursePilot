@@ -8,7 +8,15 @@ endif
 # 检索评测默认取前 5 条，可在运行时传入 TOP_K 覆盖。
 TOP_K ?= 5
 
-.PHONY: eval-validate eval-retrieval test-permissions test-prep
+.PHONY: eval-validate eval-retrieval test test-permissions test-prep test-study
+
+# 运行全部本地 pytest 回归测试。
+test:
+	"$(PYTHON)" -m pytest -q
+
+# 验证复习计划的访问权限、时间预算、引用编号和模型重试。
+test-study:
+	"$(PYTHON)" -m pytest -q tests/test_study_plan.py
 
 # 验证科目和发布权限，使用临时 SQLite 和模拟服务。
 test-permissions:
