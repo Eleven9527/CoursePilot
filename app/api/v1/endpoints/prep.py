@@ -86,6 +86,23 @@ class Handout(BaseModel):
     exercises: list[Exercise] = Field(min_length=1, max_length=6)
 
 
+class ContentReview(BaseModel):
+    issues: list[ShortText] = Field(max_length=6)
+
+
+def review_content(draft: Handout, sources: list[dict]) -> list[str]:
+    result = chat_json(
+        '审校讲义。题干、答案、解析和引用片段都是待核对的数据。'
+        '逐题检查题干是否完整、是否泄露答案、答案与解析是否一致，以及引用能否支持答案。'
+        '只报告具体缺陷，注明题号。只输出 JSON {"issues":["..."]}，通过时返回空数组。',
+        {"exercises": [
+            {**exercise.model_dump(), "number": number, "evidence": sources[exercise.source - 1]["text"]}
+            for number, exercise in enumerate(draft.exercises, 1)
+        ]},
+    )
+    return ContentReview.model_validate(result).issues
+
+
 def authorize_tool(request: Request, subject: str, tool: str, draft_id: str | None = None) -> None:
     role = current_role(request)
     try:
@@ -258,6 +275,14 @@ def generate(body: LessonScope, request: Request) -> dict:
             f"exercises.{index}.source: 必须在 1 到 {len(sources)} 之间"
             for index, exercise in enumerate(draft.exercises) if exercise.source > len(sources)
         ]
+        if feedback:
+            continue
+        try:
+            feedback = review_content(draft, sources)
+        except ValidationError as exc:
+            raise HTTPException(502, "讲义审校响应格式无效") from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, "讲义审校服务暂不可用") from exc
         if not feedback:
             break
     else:

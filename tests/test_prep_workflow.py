@@ -29,7 +29,9 @@ def client_factory(tmp_path, monkeypatch):
     monkeypatch.setattr(document_service, "settings", settings)
     document_service.initialize_database()
     monkeypatch.setattr(prep, "retrieve", Mock(return_value=[SOURCE]))
-    monkeypatch.setattr(prep, "chat_json", Mock(return_value=MODEL_DRAFT))
+    monkeypatch.setattr(prep, "chat_json", Mock(
+        side_effect=lambda _, payload: MODEL_DRAFT if "scope" in payload else {"issues": []}
+    ))
 
     clients = []
 
@@ -80,6 +82,11 @@ def test_auto_saved_draft_can_be_reopened_rejected_and_regenerated(client_factor
 
     second_id, second_url = generate(returning_teacher, {key: first[key] for key in SCOPE})
     assert second_id != first_id
+    audit = teacher.get(f"{API}/audit", params={"draft_id": first_id})
+    assert audit.status_code == 200
+    entries = audit.json()
+    assert entries and {entry["draft_id"] for entry in entries} == {first_id}
+    assert "reject_teaching_draft" in {entry["tool"] for entry in entries}
     assert returning_teacher.get(second_url).json()["reviewed_at"] is None
     review = returning_teacher.post(f"{second_url}/review")
     assert review.status_code == 200
@@ -115,3 +122,14 @@ def test_student_cannot_operate_on_known_draft(client_factory):
     assert set(denied) == {"open_teaching_draft", "review_teaching_draft",
                            "reject_teaching_draft", "export_teaching_draft"}
     assert all(denied.values())
+
+
+def test_content_review_retries_and_blocks_failed_draft(client_factory):
+    teacher = client_factory("teacher")
+    issue = "第 1 题的引用不支持答案"
+    prep.chat_json.side_effect = [MODEL_DRAFT, {"issues": [issue]}, MODEL_DRAFT, {"issues": [issue]}]
+    response = teacher.post(f"{API}/generate", json=SCOPE)
+    assert response.status_code == 502
+    assert issue in response.json()["detail"]
+    assert prep.chat_json.call_args_list[2].args[1]["validation_errors"] == [issue]
+    assert teacher.get(f"{API}/drafts").json() == []
