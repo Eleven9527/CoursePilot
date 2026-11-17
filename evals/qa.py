@@ -5,6 +5,8 @@ import json
 import re
 from http.cookiejar import CookieJar
 from pathlib import Path
+from statistics import median
+from time import perf_counter
 from urllib.error import URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
@@ -41,11 +43,14 @@ def main() -> int:
         for endpoint in (("search", "ask") if case["evidence"] else ("ask",)):
             request = Request(f"{args.api_url.rstrip('/')}/{endpoint}", data=body,
                               headers={"Content-Type": "application/json"})
+            started = perf_counter()
             try:
                 with opener.open(request, timeout=100) as response:
                     row[endpoint] = json.load(response)
             except (URLError, OSError, ValueError) as exc:
                 row.setdefault("errors", {})[endpoint] = str(exc)
+            finally:
+                row.setdefault("duration_ms", {})[endpoint] = round((perf_counter() - started) * 1000, 1)
         expected_intent = case.get("intent")
         if expected_intent:
             row["expected_intent"] = expected_intent
@@ -77,8 +82,15 @@ def main() -> int:
         row["automatic_pass"] = not row.get("errors") and all(checks)
         print(f"{case['id']}: {'PASS' if row['automatic_pass'] else 'FAIL'}", flush=True)
 
+    latency = {}
+    for endpoint in ("search", "ask"):
+        samples = [row["duration_ms"][endpoint] for row in results if endpoint in row]
+        if samples:
+            latency[endpoint] = {"samples": len(samples), "median_ms": round(median(samples), 1),
+                                 "max_ms": max(samples)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"scope": scope, "results": results}, ensure_ascii=False, indent=2),
+    args.output.write_text(json.dumps({"scope": scope, "results": results, "latency": latency},
+                                      ensure_ascii=False, indent=2),
                            encoding="utf-8")
     passed = sum(row["automatic_pass"] for row in results)
     print(f"Automatic checks: {passed}/{len(results)}. Review answers in {args.output}")

@@ -1,3 +1,5 @@
+import json
+import logging
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -73,7 +75,7 @@ def test_student_only_retrieves_published_english(environment):
         response = client.post(f"/api/v1/qa/{endpoint}", json=SCOPE)
         assert response.status_code == 200
         assert [source["chunk_id"] for source in response.json()["sources"]] == ["PUBLIC"]
-    assert chat.call_args.args[1]["sources"] == [{"number": 1, "text": "exercise PUBLIC"}]
+    assert chat.call_args.args[1]["sources"] == [{"number": 1, "unit": "第1单元", "text": "exercise PUBLIC"}]
     task_id = document_service.get_document("PUBLIC")["current_task_id"]
     assert all(call.kwargs["filter_expression"] == f'task_id in ["{task_id}"]'
                for call in semantic.call_args_list)
@@ -97,3 +99,44 @@ def test_teacher_can_preview_drafts(environment):
     response = client.post("/api/v1/qa/search", json=SCOPE)
     assert response.status_code == 200
     assert {source["chunk_id"] for source in response.json()["sources"]} == {"PUBLIC", "DRAFT"}
+
+
+def test_ask_logs_outcomes_without_content(environment, monkeypatch, caplog):
+    client, _, chat = environment
+    login(client, "student")
+    monkeypatch.setattr(qa, "classify_intent", Mock(return_value="homework_hint"))
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        hint = client.post("/api/v1/qa/ask", json=SCOPE)
+        chat.side_effect = None
+        chat.return_value = {"answer": "No evidence", "citations": []}
+        insufficient = client.post("/api/v1/qa/ask", json=SCOPE)
+        chat.return_value = {"answer": "Invalid citation", "citations": [999]}
+        invalid = client.post("/api/v1/qa/ask", json=SCOPE)
+        empty = client.post("/api/v1/qa/ask", json={**SCOPE, "unit_start": 20, "unit_end": 20})
+        forbidden = client.post("/api/v1/qa/ask", json={**SCOPE, "subject": "math"})
+
+    assert hint.status_code == insufficient.status_code == 200
+    assert hint.json()["sources"] == insufficient.json()["sources"] == []
+    assert invalid.status_code == 200
+    assert invalid.json() == insufficient.json()
+    assert empty.status_code == 200
+    assert forbidden.status_code == 403
+    events = [json.loads(record.getMessage()) for record in caplog.records if record.name == "uvicorn.error"]
+    assert [(e["status_code"], e["outcome"], e["retrieved_count"], e["citation_count"]) for e in events] == [
+        (200, "answered", 1, 0),
+        (200, "insufficient_evidence", 1, 0),
+        (200, "invalid_model_output", 1, 0),
+        (200, "insufficient_evidence", 0, 0),
+        (403, "failed", None, None),
+    ]
+    for event in events:
+        assert set(event) == {
+            "event", "status_code", "duration_ms", "search_ms", "answer_ms", "outcome", "intent",
+            "retrieved_count", "citation_count",
+        }
+        assert event["event"] == "qa.ask"
+        assert 0 <= event["search_ms"] <= event["duration_ms"]
+        if event["retrieved_count"]:
+            assert 0 <= event["answer_ms"] <= event["duration_ms"]
+        else:
+            assert event["answer_ms"] is None
