@@ -270,3 +270,34 @@ def test_content_review_feedback_includes_previous_attempt(client_factory):
     revised_input = prep.chat_json.call_args_list[2].args[1]
     assert revised_input["previous_attempt"] == MODEL_DRAFT
     assert revised_input["validation_errors"] == ["第1题缺少选项"]
+
+
+def test_teacher_tools_bind_scope_and_enforce_permissions(client_factory):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+    from app.services.prep_tools import create_prep_tools
+
+    teacher = client_factory("teacher")
+    draft_id, _ = generate(teacher)
+    request = Request({"type": "http", "session": {"account": "teacher"}})
+    tools = {item.name: item for item in create_prep_tools(
+        request, prep.LessonScope(**SCOPE), request_id="d" * 32,
+    )}
+    assert len(tools) == 4
+    assert tools["open_teaching_draft"].invoke({"resource_id": draft_id})["id"] == draft_id
+    assert tools["list_teaching_drafts"].invoke({})["drafts"][0]["id"] == draft_id
+    queue = tools["queue_teaching_handout"]
+    assert set(queue.args) == {"human_feedback", "original_draft_id"}
+    assert queue.invoke({})["id"] == "d" * 32
+    assert queue.invoke({})["id"] == "d" * 32
+    assert tools["get_teaching_job"].invoke({"resource_id": "d" * 32})["status"] == "queued"
+    other_id, _ = generate(teacher, {**SCOPE, "unit_start": 6, "unit_end": 6})
+    with pytest.raises(HTTPException) as denied:
+        tools["open_teaching_draft"].invoke({"resource_id": other_id})
+    assert denied.value.status_code == 403
+    request.session["account"] = "student"
+    for name, tool in tools.items():
+        args = {"resource_id": draft_id} if name in ("open_teaching_draft", "get_teaching_job") else {}
+        with pytest.raises(HTTPException) as denied:
+            tool.invoke(args)
+        assert denied.value.status_code == 403

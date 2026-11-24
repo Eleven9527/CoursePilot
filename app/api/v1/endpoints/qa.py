@@ -11,7 +11,8 @@ from app.core.auth import SUBJECTS, SUBJECT_MEMBERSHIPS, current_role, require_s
 from app.rag.generation.chat import chat_json
 from app.rag.generation.intents import INTENTS, routing_instructions
 from app.rag.generation.jev import classify_intent
-from app.rag.retrieval.hybrid import available_scopes, retrieve
+from app.rag.retrieval.hybrid import available_scopes
+from app.rag.retrieval.tools import create_search_tool
 
 router = APIRouter(prefix="/qa")
 logger = logging.getLogger("uvicorn.error")
@@ -71,8 +72,13 @@ def search_question(body: Question, request: Request) -> tuple[list[dict], str]:
     except RuntimeError:
         pass
     try:
-        return retrieve(body.question, body.grade, body.unit_start, body.unit_end, body.top_k, rewrite,
-                        subject=body.subject, include_drafts=role == "teacher"), intent
+        search_tool = create_search_tool(
+            role=role, subject=body.subject, grade=body.grade,
+            unit_start=body.unit_start, unit_end=body.unit_end,
+            question=body.question, top_k=body.top_k,
+        )
+        result = search_tool.invoke({"query": rewrite or body.question})
+        return result["sources"], intent
     except (RuntimeError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "检索服务暂不可用，请检查 Embedding 和 Milvus") from exc
 
