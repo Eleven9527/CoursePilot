@@ -51,7 +51,17 @@ def process_job() -> bool:
     try:
         scope = LessonScope.model_validate(dict(job))
         authorize_role("teacher", scope.subject, "search_course_materials", job_id)
-        build_handout(scope, save, progress)
+        original_draft = ""
+        if job["original_draft_id"]:
+            with connect() as connection:
+                original = connection.execute(
+                    "SELECT teacher FROM prep_drafts WHERE id=?", (job["original_draft_id"],),
+                ).fetchone()
+            if original is None:
+                raise HTTPException(404, "原稿不存在")
+            original_draft = original["teacher"]
+        build_handout(scope, save, progress, human_feedback=job["human_feedback"],
+                      original_draft=original_draft)
     except JobCancelled:
         return True
     except Exception as exc:

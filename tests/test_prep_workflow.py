@@ -218,3 +218,55 @@ def test_cancel_running_job_during_review(client_factory):
     assert teacher.get(url).json()["status"] == "cancelled"
     assert teacher.get(f"{API}/drafts").json() == []
     assert prep.chat_json.call_count == 2
+
+def test_human_feedback_reaches_worker_and_model(client_factory):
+    teacher = client_factory("teacher")
+    draft_id, url = generate(teacher)
+    assert teacher.post(url + "/reject").status_code == 200
+    payload = {**SCOPE, "human_feedback": "换成基础题", "original_draft_id": draft_id}
+    job_url = API + "/jobs?request_id=" + "a" * 32
+    assert teacher.post(job_url, json=payload).status_code == 202
+    assert teacher.post(job_url, json={**payload, "human_feedback": "其他反馈"}).status_code == 409
+    assert client_factory("student").post(
+        API + "/jobs?request_id=" + "b" * 32, json=payload,
+    ).status_code == 403
+    assert prep_worker.process_job()
+    calls = [call.args[1] for call in prep.chat_json.call_args_list if "scope" in call.args[1]]
+    assert calls[-1]["human_feedback"] == "换成基础题"
+    assert MODEL_DRAFT["title"] in calls[-1]["original_draft"]
+    draft = teacher.get(API + "/drafts/" + "a" * 32).json()
+    assert draft["reviewed_at"] is None
+    assert draft["rejected_at"] is None
+
+def test_twenty_questions_feedback_validates_count_and_preserves_failed_attempt(client_factory):
+    teacher = client_factory("teacher")
+    draft_id, _ = generate(teacher)
+    short = {**MODEL_DRAFT}
+    full = {**MODEL_DRAFT, "exercises": [
+        {**MODEL_DRAFT["exercises"][0], "question": f"Exercise {number}: It ___ made here."}
+        for number in range(1, 21)
+    ]}
+    prep.chat_json.reset_mock()
+    prep.chat_json.side_effect = [short, full, {"issues": []}]
+    payload = {**SCOPE, "human_feedback": "题目数量太少了，我想要20题", "original_draft_id": draft_id}
+    assert teacher.post(API + "/jobs?request_id=" + "c" * 32, json=payload).status_code == 202
+    assert prep_worker.process_job()
+    calls = prep.chat_json.call_args_list
+    assert calls[0].args[1]["requested_count"] == 20
+    assert calls[1].args[1]["previous_attempt"] == short
+    assert "需要 20 道题" in calls[1].args[1]["validation_errors"][0]
+    draft = teacher.get(API + "/drafts/" + "c" * 32).json()
+    assert draft["student"].count("### 第 ") == 20
+    assert draft["reviewed_at"] is None
+
+
+def test_content_review_feedback_includes_previous_attempt(client_factory):
+    teacher = client_factory("teacher")
+    prep.chat_json.reset_mock()
+    prep.chat_json.side_effect = [
+        MODEL_DRAFT, {"issues": ["第1题缺少选项"]}, MODEL_DRAFT, {"issues": []},
+    ]
+    generate(teacher)
+    revised_input = prep.chat_json.call_args_list[2].args[1]
+    assert revised_input["previous_attempt"] == MODEL_DRAFT
+    assert revised_input["validation_errors"] == ["第1题缺少选项"]

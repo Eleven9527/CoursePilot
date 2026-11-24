@@ -23,6 +23,14 @@
     .primary:disabled {opacity:.55}
     .preview {margin-top:20px}
     .preview pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+    .review-panel {margin-top:20px;padding-top:20px;border-top:1px solid #d7e4db}
+    .review-panel textarea {display:block;width:100%;min-height:112px;margin-top:8px;padding:12px 14px;resize:vertical;border:1px solid #aebfb6;border-radius:10px;background:#fbfdfb;color:inherit;font:inherit;line-height:1.6}
+    .review-panel textarea::placeholder {color:#7a8982;font-weight:400}
+    .review-panel textarea:focus {outline:2px solid #17634b;outline-offset:2px}
+    .review-actions {display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+    .review-actions button {margin:0;min-height:42px}
+    .review-actions .secondary {border:1px solid #aebfb6;background:white;color:#17634b}
+    .review-actions button:disabled {cursor:not-allowed}
     [v-cloak] {display:none}
     @media(max-width:950px){.layout{grid-template-columns:190px minmax(0,1fr)}}
     @media(max-width:680px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
@@ -86,8 +94,15 @@
       <button class="primary" :disabled="exporting || !reviewedAt" @click="download">{{ exporting ? '正在导出…' : '下载讲义' }}</button>
       <p v-if="exportError" class="notice" role="alert">{{ exportError }}</p>
       <p v-if="saveMessage" class="notice" role="status">{{ saveMessage }}</p>
-      <button v-if="savedId && !reviewedAt && !rejectedAt" class="primary" :disabled="reviewing" @click="confirmReview">确认审阅</button>
-      <button v-if="savedId && !reviewedAt" class="primary" :disabled="reviewing || busy" @click="regenerate">{{ rejectedAt ? '重新生成' : '拒绝并重新生成' }}</button>
+      <div v-if="savedId && !reviewedAt" class="review-panel">
+      <label for="review-feedback">修改反馈</label>
+        <textarea id="review-feedback" v-model="humanFeedback" maxlength="2000" :disabled="reviewing || busy"
+          placeholder="例如：第2题太难，请换成基础题，并补充解题提示"></textarea>
+      <div class="review-actions">
+      <button v-if="!rejectedAt" class="primary" :disabled="reviewing || busy" @click="confirmReview">确认审阅</button>
+      <button class="primary secondary" :disabled="reviewing || busy || !humanFeedback.trim()" @click="regenerate">{{ reviewing ? '正在处理…' : rejectedAt ? '根据反馈重新生成' : '退回并重新生成' }}</button>
+      </div>
+      </div>
       <p v-if="savedId" class="notice">{{ rejectedAt ? '已拒绝' : reviewedAt ? '已审阅，可以下载' : '待审阅，确认后可下载' }}</p>
       <pre>{{ draft[version] }}</pre>
       <div v-if="version === 'teacher'">
@@ -156,7 +171,7 @@
   const root = document.querySelector('#prep-app');
   const api = root.dataset.apiPrefix + '/qa';
   Vue.createApp({
-    data: () => ({subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
+    data: () => ({humanFeedback: '', subjects: {}, scopes: {}, subject: '', grade: '', start: null, end: null,
                   status: '正在读取科目…', scopeRequest: 0, busy: false, draft: null,
                   version: 'student', format: 'docx', exporting: false, exportError: '', generationError: '', jobProgress: '',
                   jobs: [], jobListError: '', cancelling: '',
@@ -253,6 +268,7 @@
         }
       },
       async regenerate() {
+        if (!this.humanFeedback.trim()) return;
         if (this.reviewing || this.busy || !this.savedId || this.reviewedAt) return;
         this.reviewing = true;
         const id = this.savedId;
@@ -264,9 +280,10 @@
             if (this.savedId !== id) return;
             this.rejectedAt = state.rejected_at;
           }
-          const draft = await this.generateFor(scope);
+          const draft = await this.generateFor({...scope, human_feedback: this.humanFeedback.trim(), original_draft_id: id});
           if (this.savedId !== id) return;
           this.draft = draft;
+          this.humanFeedback = '';
           this.savedId = draft.id;
           this.rejectedAt = null;
           this.version = 'student';

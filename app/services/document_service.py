@@ -31,6 +31,7 @@ def initialize_database() -> None:
             ("attempts", "INTEGER NOT NULL DEFAULT 0"),
             ("queued_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
             ("previous_error", "TEXT"), ("previous_error_stage", "TEXT"),
+            ("human_feedback", "TEXT NOT NULL DEFAULT ''"), ("original_draft_id", "TEXT"),
         ):
             if settings.database_url:
                 connection.execute(f"ALTER TABLE prep_jobs ADD COLUMN IF NOT EXISTS {column} {definition}")
