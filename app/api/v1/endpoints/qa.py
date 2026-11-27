@@ -33,7 +33,15 @@ class LessonScope(BaseModel):
 
 class Question(LessonScope):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+    clarification: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] = ""
     top_k: int = Field(default=5, ge=1, le=10)
+
+    @property
+    def contextual_question(self) -> str:
+        """将用户补充信息与原问题合并，供重新路由和检索使用。"""
+        if self.clarification:
+            return f"{self.question}\n补充信息：{self.clarification}"
+        return self.question
 
 
 @router.get("/scopes")
@@ -53,7 +61,7 @@ def search_question(body: Question, request: Request) -> tuple[list[dict], str]:
     role = current_role(request)
     require_subject(role, body.subject)
     rewrite = ""
-    jev_intent = classify_intent(body.question)
+    jev_intent = classify_intent(body.contextual_question)
     intent = jev_intent or "general_qa"
     try:
         routing = chat_json(
@@ -61,7 +69,7 @@ def search_question(body: Question, request: Request) -> tuple[list[dict], str]:
                 '将问题改写为检索课程资料用的一条短查询。保留题号、人名和英文短语。'
                 '只输出 JSON {"query":"..."}。'
             ),
-            {"question": body.question},
+            {"question": body.contextual_question},
         )
         rewritten = routing.get("query")
         if isinstance(rewritten, str):
@@ -75,7 +83,7 @@ def search_question(body: Question, request: Request) -> tuple[list[dict], str]:
         search_tool = create_search_tool(
             role=role, subject=body.subject, grade=body.grade,
             unit_start=body.unit_start, unit_end=body.unit_end,
-            question=body.question, top_k=body.top_k,
+            question=body.contextual_question, top_k=body.top_k,
         )
         result = search_tool.invoke({"query": rewrite or body.question})
         return result["sources"], intent
@@ -142,15 +150,29 @@ def answer_question(body: Question, sources: list[dict], intent: str) -> tuple[d
             '列举选项或多个要点时每项单独一行。'
             '在答案里用 [1] 这样的编号标注出处。找不到指定题目、单元或所需依据时，'
             '只说明依据不足，citations 返回空数组，结束回答。'
-            '只输出 JSON {"answer":"...","citations":[1,2]}。'
+            '如果用户的指代、题号或任务目的存在会影响答案的歧义，且片段无法唯一定位，'
+            '请用 clarification 提出一个具体的澄清问题，例如补充题干或资料名称，'
+            '不要猜测用户所指题目。已知的单元范围无需重复询问。'
+            '单纯资料缺失或问题超出所选范围时说明依据不足，无需澄清。'
+            'clarification 非空时 answer 返回空字符串，citations 返回空数组；'
+            '可以直接回答时 clarification 返回空字符串。'
+            '只输出 JSON {"answer":"...","citations":[1,2],"clarification":""}。'
             f'本次回答规则：{INTENTS[intent][1]} 本次规则优先于上述通用回答方式。',
-            {"question": body.question, "unit_start": body.unit_start, "unit_end": body.unit_end, "sources": [
+            {"question": body.contextual_question, "unit_start": body.unit_start, "unit_end": body.unit_end, "sources": [
                 {"number": number, "unit": source["unit"], "text": source["text"]}
                 for number, source in enumerate(sources, 1)
             ]},
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
+    clarification = result.get("clarification")
+    if isinstance(clarification, str) and clarification.strip():
+        if len(clarification) > 500:
+            return insufficient, "invalid_model_output"
+        return {
+            "answer": clarification.strip(), "sources": [], "intent": intent,
+            "needs_clarification": True,
+        }, "needs_clarification"
     answer = result.get("answer")
     citations = result.get("citations")
     if not isinstance(answer, str) or not answer.strip() or not isinstance(citations, list):
@@ -160,7 +182,7 @@ def answer_question(body: Question, sources: list[dict], intent: str) -> tuple[d
     if any(type(index) is not int or not 1 <= index <= len(sources) for index in citations):
         return insufficient, "invalid_model_output"
     if intent == "homework_hint":
-        # The original chunks include answer keys.
+        # 原始片段包含答案，作业提示只返回生成内容，避免引用展开后泄露答案。
         return {"answer": re.sub(r"\[\d+\]", "", answer).strip(), "intent": intent, "sources": []}, "answered"
     return {"answer": answer, "intent": intent, "sources": [
         {**sources[index - 1], "number": index} for index in dict.fromkeys(citations)

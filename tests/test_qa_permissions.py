@@ -140,3 +140,32 @@ def test_ask_logs_outcomes_without_content(environment, monkeypatch, caplog):
             assert 0 <= event["answer_ms"] <= event["duration_ms"]
         else:
             assert event["answer_ms"] is None
+
+
+def test_clarification_round_trip_and_permissions(environment):
+    client, semantic, chat = environment
+    login(client, "student")
+    chat.side_effect = lambda prompt, body: (
+        {"answer": "", "citations": [], "clarification": "请补充题干或资料名称。"}
+        if "sources" in body else {"query": "", "intent": "general_qa"}
+    )
+    response = client.post("/api/v1/qa/ask", json=SCOPE)
+    assert response.status_code == 200
+    assert response.json()["needs_clarification"] is True
+    assert response.json()["sources"] == []
+    chat.side_effect = lambda prompt, body: (
+        {"answer": "Answer [1]", "citations": [1], "clarification": ""}
+        if "sources" in body else {"query": "", "intent": "general_qa"}
+    )
+    response = client.post("/api/v1/qa/ask", json={**SCOPE, "clarification": "自行车那道题"})
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["chunk_id"] == "PUBLIC"
+    assert chat.call_args.args[1]["question"] == SCOPE["question"] + "\n补充信息：自行车那道题"
+    calls = semantic.call_count
+    assert client.post("/api/v1/qa/ask", json={
+        **SCOPE, "clarification": "自行车那道题", "subject": "math",
+    }).status_code == 403
+    assert semantic.call_count == calls
+    assert client.post("/api/v1/qa/ask", json={
+        **SCOPE, "clarification": "x" * 501,
+    }).status_code == 422

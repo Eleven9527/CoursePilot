@@ -62,12 +62,17 @@
   <p v-if="status" id="status" role="status">{{ status }}</p>
   <section v-if="result">
     <div class="answer-heading">
-      <h2>回答</h2>
+      <h2>{{ result.needs_clarification ? '需要补充信息' : '回答' }}</h2>
       <span v-if="result.intent" class="answer-intent">识别意图 · {{ intentLabel }} <code v-if="intentLabel !== result.intent">{{ result.intent }}</code></span>
     </div>
     <div id="answer">
       <p v-for="(paragraph, index) in answerParagraphs" :key="index">{{ paragraph }}</p>
     </div>
+    <form v-if="result.needs_clarification" @submit.prevent="ask(true)">
+      <label>补充信息<textarea v-model.trim="clarification" required maxlength="500"
+        :disabled="busy" placeholder="补充题干、资料名称或你希望完成的任务"></textarea></label>
+      <button :disabled="busy || !clarification">{{ busy ? '正在处理…' : '补充并继续提问' }}</button>
+    </form>
     <div v-if="result.sources.length" class="answer-sources">
       <h3>引用资料</h3>
       <details v-for="source in result.sources" :key="source.chunk_id">
@@ -86,7 +91,8 @@
   Vue.createApp({
     data() {
       return {subjects: {}, subject: '', scopes: {}, grade: '', start: null, end: null, question: '',
-              busy: false, status: '正在读取可用资料…', result: null};
+              busy: false, status: '正在读取可用资料…', result: null,
+              clarification: '', lastQuestion: ''};
     },
     computed: {
       intentLabel() {
@@ -107,8 +113,10 @@
       endUnits() { return this.units.filter(unit => unit >= this.start); },
     },
     watch: {
-      grade() { this.start = this.units[0] ?? null; this.end = this.start; },
-      start() { if (!this.endUnits.includes(this.end)) this.end = this.start; },
+      grade() { this.clearClarification(); this.start = this.units[0] ?? null; this.end = this.start; },
+      start() { this.clearClarification(); if (!this.endUnits.includes(this.end)) this.end = this.start; },
+      end() { this.clearClarification(); },
+      question() { this.clearClarification(); },
     },
     async mounted() {
       try {
@@ -120,6 +128,11 @@
       }
     },
     methods: {
+      clearClarification() {
+        this.clarification = '';
+        this.lastQuestion = '';
+        this.result = null;
+      },
       async loadScopes() {
         this.grade = '';
         this.result = null;
@@ -141,18 +154,23 @@
         if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败');
         return data;
       },
-      async ask() {
+      async ask(followUp = false) {
         if (this.busy || !this.question || !this.grade) return;
+        const supplement = followUp === true ? this.clarification : '';
+        if (followUp === true && !supplement) return;
+        const original = followUp === true ? this.lastQuestion : this.question;
         this.busy = true;
-        this.result = null;
         this.status = '正在检索资料并生成回答…';
         try {
           this.result = await this.request('/ask', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({question: this.question, grade: this.grade,
+            body: JSON.stringify({question: original, clarification: supplement,
+                                  subject: this.subject, grade: this.grade,
                                   unit_start: this.start, unit_end: this.end}),
           });
+          this.lastQuestion = original;
+          if (!this.result.needs_clarification) this.clarification = '';
           this.status = '';
         } catch (error) {
           this.status = error.message;
